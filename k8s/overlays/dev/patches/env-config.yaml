@@ -1,0 +1,17 @@
+# patches/env-config.yaml — Environment-specific ConfigMap values for dev.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  environment: "dev"
+  log_level: "debug"  # verbose logging is helpful in dev
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+data:
+  backend_url: "http://backend.gitops-dev.svc.cluster.local:8000"

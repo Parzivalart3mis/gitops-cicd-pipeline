@@ -1,0 +1,49 @@
+---
+title: GitOps Reconciliation Loop
+---
+graph TB
+    subgraph Git ["📁 Git Repository (Source of Truth)"]
+        A[k8s/overlays/dev\nkustomization.yaml\nimage: backend:a1b2c3d]
+    end
+
+    subgraph ArgoCD ["🔄 ArgoCD Controller"]
+        B[Compare\nDesired State vs Actual State]
+        C{Drift\nDetected?}
+        D[Reconcile\nkubectl apply]
+        E[Report: Synced ✅]
+        F[Report: OutOfSync ⚠️\nAutoSync ON → apply\nAutoSync OFF → alert]
+    end
+
+    subgraph K8s ["☸️ Kubernetes Cluster"]
+        G[Actual State\nDeployment: backend\nimage: backend:a1b2c3d]
+        H[Rolling Update\nnew pods created\nold pods terminated]
+        I[Healthy Pods\nreadiness probe passes]
+    end
+
+    subgraph CI ["⚙️ GitHub Actions"]
+        J[Build & Push\nbackend:b2c3d4e]
+        K[Update Manifest\nkustomize edit set image]
+        L[Git Push\nchore: update dev to b2c3d4e]
+    end
+
+    subgraph Dev ["👨‍💻 Developer"]
+        M[git push main]
+    end
+
+    M --> CI
+    L --> A
+    A -->|Poll every 3 min| B
+    B --> C
+    C -->|No| E
+    C -->|Yes| F
+    F -->|selfHeal: true| D
+    D --> H
+    H --> I
+    I --> G
+    G -->|Reports actual state| B
+
+    style Git fill:#1e3a5f,color:#93c5fd
+    style ArgoCD fill:#312e81,color:#a5b4fc
+    style K8s fill:#064e3b,color:#6ee7b7
+    style CI fill:#422006,color:#fcd34d
+    style Dev fill:#3b0764,color:#e9d5ff

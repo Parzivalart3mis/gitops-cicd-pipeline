@@ -1,0 +1,62 @@
+# observability/grafana/grafana-values.yaml
+# Helm values for Grafana.
+#
+# Install:
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm install grafana grafana/grafana \
+#     --namespace monitoring --create-namespace \
+#     --values observability/grafana/grafana-values.yaml
+
+adminPassword: "gitops-demo-admin"  # CHANGE THIS — use a sealed secret in production
+
+service:
+  type: NodePort
+  nodePort: 30300
+
+# Pre-configure the Prometheus data source
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+        isDefault: true
+        access: proxy
+
+# Auto-provision dashboards from ConfigMaps with the grafana_dashboard label
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: default
+        orgId: 1
+        folder: "GitOps Demo"
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+# Load dashboards from the dashboards/ directory
+dashboardsConfigMaps:
+  default: grafana-dashboards
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Disable unused plugins for a leaner image
+plugins: []
+
+# Enable anonymous access for demo purposes (disable in production)
+grafana.ini:
+  auth.anonymous:
+    enabled: true
+    org_role: Viewer
+  server:
+    root_url: "http://localhost:30300"

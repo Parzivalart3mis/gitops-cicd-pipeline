@@ -1,0 +1,69 @@
+# argocd/applications/dev.yaml — ArgoCD Application for the dev environment.
+#
+# This is a standard ArgoCD Application CRD. ArgoCD watches the Git repo
+# at the specified path and continuously reconciles the Kubernetes cluster
+# state to match. This is the core of the GitOps loop.
+#
+# Dev configuration:
+#   - automated: true  → every git push to main auto-deploys to dev
+#   - selfHeal: true   → manual kubectl changes are reverted (drift detection)
+#   - prune: true      → resources deleted from Git are removed from cluster
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitops-demo-dev
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: gitops-demo-dev
+    app.kubernetes.io/part-of: gitops-demo
+    environment: dev
+    team: platform
+  annotations:
+    # ArgoCD Notifications — uncomment and configure the Slack channel to enable
+    # notifications.argoproj.io/subscribe.on-sync-succeeded.slack: deployments
+    # notifications.argoproj.io/subscribe.on-sync-failed.slack: deployments
+    # notifications.argoproj.io/subscribe.on-health-degraded.slack: deployments
+  # Cascade delete: removing this Application also removes all deployed resources
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: gitops-demo
+
+  source:
+    repoURL: https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git
+    targetRevision: main
+    path: k8s/overlays/dev
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gitops-dev
+
+  syncPolicy:
+    automated:
+      prune: true         # delete K8s resources that were removed from Git
+      selfHeal: true       # revert any manual kubectl changes (drift detection)
+      allowEmpty: false    # refuse to sync if kustomize build produces 0 resources
+    syncOptions:
+      - CreateNamespace=true           # create gitops-dev namespace if missing
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true                 # delete old resources after new ones are healthy
+      - ApplyOutOfSyncOnly=true        # only apply resources that are out of sync
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 1m
+
+  # Tell ArgoCD to ignore replica count diffs caused by HPA scaling.
+  # Without this, ArgoCD would continuously try to revert HPA-managed replicas.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+  # Health assessment — ArgoCD uses these to determine Application health
+  # (default behaviour is usually sufficient but documented here for clarity)
+  revisionHistoryLimit: 10

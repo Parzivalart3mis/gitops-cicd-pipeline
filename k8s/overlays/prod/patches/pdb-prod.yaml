@@ -1,0 +1,18 @@
+# patches/pdb-prod.yaml — Stricter PDB for production.
+# minAvailable: 2 ensures that during a node drain or rolling update,
+# at least 2 backend replicas (out of 3) remain available.
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+spec:
+  minAvailable: 2
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-pdb
+spec:
+  minAvailable: 2

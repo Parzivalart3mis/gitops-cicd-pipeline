@@ -1,0 +1,17 @@
+# patches/replica-count.yaml — Set replica counts for dev.
+# Dev uses single replicas to minimise resource consumption on a local cluster.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+spec:
+  replicas: 1
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 1

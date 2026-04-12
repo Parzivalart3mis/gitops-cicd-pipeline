@@ -1,0 +1,34 @@
+# common/pod-disruption-budget.yaml — PodDisruptionBudgets.
+#
+# PDBs ensure that voluntary disruptions (node drains, cluster upgrades)
+# do not simultaneously evict all pods of a service.
+#
+# The base specifies minAvailable: 1. Production overlay patches this
+# to minAvailable: 2 for true HA.
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  labels:
+    app: backend
+    app.kubernetes.io/component: pod-disruption-budget
+spec:
+  minAvailable: 1  # overridden to 2 in prod overlay
+  selector:
+    matchLabels:
+      app: backend
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-pdb
+  labels:
+    app: frontend
+    app.kubernetes.io/component: pod-disruption-budget
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: frontend

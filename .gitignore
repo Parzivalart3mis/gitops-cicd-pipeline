@@ -1,0 +1,97 @@
+# .gitignore — files that must never be committed to this repository.
+
+# ---------------------------------------------------------------------------
+# SECURITY — NEVER commit these
+# ---------------------------------------------------------------------------
+# Raw Kubernetes Secrets (use SealedSecrets instead)
+**/secret.yaml
+**/secrets.yaml
+# Only SealedSecret CRDs (sealed-secret.yaml) should be committed.
+
+# Environment variables / dotenv files
+.env
+.env.*
+!.env.example
+
+# Kubeconfig (contains cluster credentials)
+kubeconfig
+*.kubeconfig
+~/.kube/config
+
+# Private keys
+*.pem
+*.key
+*.p12
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------------------------------------------------------
+# Node / Frontend
+# ---------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-error.log
+dist/
+.parcel-cache/
+
+# ---------------------------------------------------------------------------
+# Docker
+# ---------------------------------------------------------------------------
+# Don't ignore Dockerfiles themselves — only build artefacts
+.docker/
+
+# ---------------------------------------------------------------------------
+# Kubernetes / Helm
+# ---------------------------------------------------------------------------
+# Rendered Helm templates (ephemeral, not source of truth)
+*.rendered.yaml
+charts/
+
+# ---------------------------------------------------------------------------
+# Editors / OS
+# ---------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# Trivy / Security scan artefacts
+# ---------------------------------------------------------------------------
+trivy-results.sarif
+trivy-results.json
+/tmp/trivy-cache/
+
+# ---------------------------------------------------------------------------
+# CI artefacts
+# ---------------------------------------------------------------------------
+coverage-reports/
+test-results/

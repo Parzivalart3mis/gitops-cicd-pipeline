@@ -1,0 +1,80 @@
+# argocd/install/argocd-values.yaml — Custom Helm values for ArgoCD.
+#
+# Install ArgoCD with these values:
+#   helm repo add argo https://argoproj.github.io/argo-helm
+#   helm install argocd argo/argo-cd \
+#     --namespace argocd --create-namespace \
+#     --values argocd/install/argocd-values.yaml
+
+global:
+  # Match labels required by OPA policies
+  additionalLabels:
+    team: platform
+    app.kubernetes.io/part-of: gitops-demo
+
+server:
+  # Expose the ArgoCD UI via NodePort for local Kind cluster access.
+  # In a cloud environment, use service.type: LoadBalancer or an Ingress.
+  service:
+    type: NodePort
+    nodePortHttp: 30080
+    nodePortHttps: 30443
+
+  # Disable TLS on the server so we can access the UI over plain HTTP locally.
+  # In production: enable TLS and configure a proper certificate.
+  insecure: true
+
+  config:
+    # URL that ArgoCD uses to build deep-links (e.g., in Slack notifications)
+    url: http://localhost:30080
+
+    # Repository credentials — add your GitHub PAT here for private repos
+    repositories: |
+      - url: https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git
+
+  # Resource requests/limits for the ArgoCD server pod
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+applicationSet:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+repoServer:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+redis:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# Argo CD Notifications controller — enables Slack/email alerts on sync events
+notifications:
+  enabled: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi

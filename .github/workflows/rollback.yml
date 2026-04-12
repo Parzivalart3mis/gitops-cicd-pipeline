@@ -1,0 +1,147 @@
+# .github/workflows/rollback.yml — Emergency rollback workflow.
+#
+# Reverts a specific environment to a previous image tag by updating the
+# Kustomize overlay and creating a GitHub Issue documenting the rollback
+# (for audit trail and post-mortem purposes).
+#
+# Rollback is a Git operation: we write the old tag to the overlay and
+# push a commit. ArgoCD detects the change and syncs the old image.
+# This means rollback is fully auditable via git log.
+#
+# Alternative rollback: kubectl rollout undo deployment/backend -n <ns>
+# But that method is not GitOps — it creates drift between Git and the cluster.
+
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to rollback"
+        required: true
+        type: choice
+        options: [dev, staging, prod]
+      target_tag:
+        description: "Image tag to rollback to (git SHA, e.g. a1b2c3d)"
+        required: true
+        type: string
+      reason:
+        description: "Reason for rollback (will be documented in a GitHub Issue)"
+        required: true
+        type: string
+
+jobs:
+  rollback:
+    name: Rollback ${{ inputs.environment }} to ${{ inputs.target_tag }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Update overlay to rollback tag
+        run: |
+          ENV="${{ inputs.environment }}"
+          TAG="${{ inputs.target_tag }}"
+          OWNER="${{ github.repository_owner }}"
+
+          cd k8s/overlays/${ENV}
+
+          kustomize edit set image \
+            ghcr.io/${OWNER}/gitops-backend=ghcr.io/${OWNER}/gitops-backend:${TAG}
+          kustomize edit set image \
+            ghcr.io/${OWNER}/gitops-frontend=ghcr.io/${OWNER}/gitops-frontend:${TAG}
+
+          # Also update the git_sha in the env-config patch for /healthz accuracy
+          sed -i "s/git_sha: .*/git_sha: \"${TAG}\"/" \
+            patches/env-config.yaml
+
+      - name: Commit rollback
+        run: |
+          ENV="${{ inputs.environment }}"
+          TAG="${{ inputs.target_tag }}"
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/overlays/${ENV}/
+
+          git commit -m "chore(rollback): ${ENV} → ${TAG}
+
+          ROLLBACK — Environment: ${ENV}
+          Target tag: ${TAG}
+          Reason: ${{ inputs.reason }}
+          Triggered by: ${{ github.actor }}
+          Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          git push
+
+      - name: Create GitHub Issue documenting the rollback
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const now = new Date().toISOString();
+            const body = `## 🔄 Rollback Executed
+
+            | Field | Value |
+            |-------|-------|
+            | **Environment** | \`${{ inputs.environment }}\` |
+            | **Rolled back to** | \`${{ inputs.target_tag }}\` |
+            | **Triggered by** | @${{ github.actor }} |
+            | **Timestamp** | ${now} |
+            | **Reason** | ${{ inputs.reason }} |
+            | **Workflow run** | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |
+
+            ## Next Steps
+
+            - [ ] Verify the rollback was successful: \`kubectl rollout status deployment/backend -n gitops-${{ inputs.environment }}\`
+            - [ ] Check the /healthz endpoint returns the expected version: \`curl http://backend.gitops.local/healthz\`
+            - [ ] Investigate root cause of the issue that prompted rollback
+            - [ ] Document findings in this issue
+            - [ ] Plan a fix and re-promote through the standard promotion flow
+
+            ## ArgoCD Sync
+
+            If ArgoCD auto-sync is disabled for this environment, manually trigger sync:
+            \`\`\`
+            argocd app sync gitops-demo-${{ inputs.environment }}
+            \`\`\`
+            `;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[ROLLBACK] ${{ inputs.environment }} → ${{ inputs.target_tag }} (${now.split('T')[0]})`,
+              body: body,
+              labels: ['rollback', 'incident', '${{ inputs.environment }}'],
+            });
+
+      - name: Print instructions
+        run: |
+          ENV="${{ inputs.environment }}"
+          TAG="${{ inputs.target_tag }}"
+
+          echo "============================================================"
+          echo "✅ Rollback commit pushed!"
+          echo "============================================================"
+          echo ""
+          echo "Environment: ${ENV}"
+          echo "Rolled back to: ${TAG}"
+          echo ""
+          echo "If auto-sync is enabled (dev), ArgoCD will sync automatically."
+          echo "Otherwise, trigger sync manually:"
+          echo "  argocd app sync gitops-demo-${ENV}"
+          echo ""
+          echo "Monitor rollout:"
+          echo "  kubectl rollout status deployment/backend -n gitops-${ENV}"
+          echo "  kubectl rollout status deployment/frontend -n gitops-${ENV}"

@@ -1,0 +1,92 @@
+# argocd/projects/gitops-project.yaml — ArgoCD AppProject with RBAC.
+#
+# AppProjects scope what an Application can deploy and where.
+# This project:
+#   - Limits source repos to this specific repository.
+#   - Limits destination namespaces to our three app namespaces.
+#   - Blocks deployment to the argocd namespace (prevent privilege escalation).
+#   - Restricts which Kubernetes resource kinds can be managed.
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: gitops-demo
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    team: platform
+  # Prevent accidental deletion of the project while apps still reference it.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: "GitOps CI/CD portfolio demo project"
+
+  # Only allow syncing from this specific repository.
+  sourceRepos:
+    - "https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git"
+
+  # Only allow deploying to these namespaces on the in-cluster API server.
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: gitops-dev
+    - server: https://kubernetes.default.svc
+      namespace: gitops-staging
+    - server: https://kubernetes.default.svc
+      namespace: gitops-prod
+
+  # Allow all core Kubernetes resource kinds relevant to this project.
+  # Anything not listed here will be blocked by ArgoCD.
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    - group: ""
+      kind: Secret
+    - group: ""
+      kind: ResourceQuota
+    - group: apps
+      kind: Deployment
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: networking.k8s.io
+      kind: Ingress
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    - group: policy
+      kind: PodDisruptionBudget
+    - group: bitnami.com
+      kind: SealedSecret
+
+  # RBAC roles within this project.
+  roles:
+    - name: dev-deployer
+      description: "Can sync the dev application only"
+      policies:
+        - p, proj:gitops-demo:dev-deployer, applications, sync, gitops-demo/gitops-demo-dev, allow
+      groups:
+        - gitops-dev-team
+
+    - name: release-manager
+      description: "Can sync staging and prod applications"
+      policies:
+        - p, proj:gitops-demo:release-manager, applications, sync, gitops-demo/gitops-demo-staging, allow
+        - p, proj:gitops-demo:release-manager, applications, sync, gitops-demo/gitops-demo-prod, allow
+        - p, proj:gitops-demo:release-manager, applications, get, gitops-demo/*, allow
+      groups:
+        - gitops-release-team
+
+  # Sync windows — example: block prod deployments on weekends
+  syncWindows:
+    - kind: deny
+      schedule: "0 0 * * 0,6"  # midnight on Saturday and Sunday
+      duration: 24h
+      applications:
+        - gitops-demo-prod
+      manualSync: false  # still allow emergency manual syncs

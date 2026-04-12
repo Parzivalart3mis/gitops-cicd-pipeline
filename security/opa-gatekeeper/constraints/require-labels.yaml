@@ -1,0 +1,72 @@
+# security/opa-gatekeeper/constraints/require-labels.yaml
+# OPA Gatekeeper constraint: all Kubernetes resources must have required labels.
+#
+# Why: Without consistent labels, it's impossible to identify which team owns
+# a resource, which application it belongs to, or which environment it runs in.
+# This is especially important for cost attribution and incident response.
+#
+# Apply after installing Gatekeeper:
+#   kubectl apply -f security/opa-gatekeeper/constraints/require-labels.yaml
+
+# Step 1: Define the ConstraintTemplate (the policy logic in Rego)
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: k8srequiredlabels
+  labels:
+    team: platform
+    app.kubernetes.io/component: opa-policy
+spec:
+  crd:
+    spec:
+      names:
+        kind: K8sRequiredLabels
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            labels:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package k8srequiredlabels
+
+        violation[{"msg": msg, "details": {"missing_labels": missing}}] {
+          provided := {label | input.review.object.metadata.labels[label]}
+          required := {label | label := input.parameters.labels[_]}
+          missing := required - provided
+          count(missing) > 0
+          msg := sprintf(
+            "Resource %v/%v is missing required labels: %v",
+            [input.review.object.kind, input.review.object.metadata.name, missing]
+          )
+        }
+
+---
+# Step 2: Instantiate the constraint (apply the policy)
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: K8sRequiredLabels
+metadata:
+  name: require-app-labels
+  labels:
+    team: platform
+    app.kubernetes.io/component: opa-policy
+spec:
+  # Apply to Deployments and Services in our app namespaces
+  match:
+    kinds:
+      - apiGroups: ["apps"]
+        kinds: ["Deployment"]
+      - apiGroups: [""]
+        kinds: ["Service"]
+    namespaces:
+      - gitops-dev
+      - gitops-staging
+      - gitops-prod
+  parameters:
+    labels:
+      - "app"
+      - "team"

@@ -1,0 +1,51 @@
+# argocd/applications/prod.yaml — ArgoCD Application for production.
+#
+# Production is NEVER auto-synced. Sync must be triggered manually via the
+# ArgoCD UI, CLI, or the promote.yml GitHub Actions workflow.
+# The AppProject sync window blocks weekend deployments.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitops-demo-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: gitops-demo-prod
+    app.kubernetes.io/part-of: gitops-demo
+    environment: prod
+    team: platform
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: gitops-demo
+
+  source:
+    repoURL: https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git
+    targetRevision: main
+    path: k8s/overlays/prod
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gitops-prod
+
+  syncPolicy:
+    # No automated sync — prod requires explicit human approval
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 2
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+  revisionHistoryLimit: 10

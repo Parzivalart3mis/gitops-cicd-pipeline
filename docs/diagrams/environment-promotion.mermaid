@@ -1,0 +1,55 @@
+---
+title: Environment Promotion Flow
+---
+flowchart LR
+    subgraph Build ["Build Phase"]
+        Code[Code Change\ngit push main]
+        CI[CI Pipeline\nTests + Scan + Build]
+        Image[Docker Image\nghcr.io/app:a1b2c3d]
+    end
+
+    subgraph Dev ["Dev Environment\nAuto-Deploy"]
+        DevManifest[k8s/overlays/dev\nnewTag: a1b2c3d]
+        DevSync[ArgoCD Auto-Sync\n~60 seconds]
+        DevApp[Running in Dev\ngitops-dev namespace]
+        DevVerify{Manual\nVerification\nby developer}
+    end
+
+    subgraph Staging ["Staging Environment\nManual Promote"]
+        StagingPromote[promote.yml\nworkflow_dispatch]
+        StagingManifest[k8s/overlays/staging\nnewTag: a1b2c3d]
+        StagingSync[Manual ArgoCD Sync\nor team approval]
+        StagingApp[Running in Staging\ngitops-staging namespace]
+        StagingVerify{QA Sign-off\nIntegration Tests}
+    end
+
+    subgraph Prod ["Production\nManual Promote + Approve"]
+        ProdPromote[promote.yml\nworkflow_dispatch]
+        ProdManifest[k8s/overlays/prod\nnewTag: a1b2c3d]
+        ProdSync[Manual ArgoCD Sync\nwith approval]
+        ProdApp[Running in Prod\ngitops-prod namespace]
+    end
+
+    subgraph Rollback ["Emergency Rollback"]
+        RollbackWF[rollback.yml\nworkflow_dispatch]
+        OldTag[Old image tag\nknown-good SHA]
+        GitRevert[Git commit\nchore: rollback env → SHA]
+        ArgoSync[ArgoCD Sync\nold version deployed]
+    end
+
+    Code --> CI --> Image
+    Image --> DevManifest --> DevSync --> DevApp --> DevVerify
+    DevVerify -->|Looks good ✅| StagingPromote
+    DevVerify -->|Bug found ❌| Code
+    StagingPromote --> StagingManifest --> StagingSync --> StagingApp --> StagingVerify
+    StagingVerify -->|Sign-off ✅| ProdPromote
+    StagingVerify -->|Issues found ❌| Code
+    ProdPromote --> ProdManifest --> ProdSync --> ProdApp
+    ProdApp -->|Incident!| RollbackWF
+    RollbackWF --> OldTag --> GitRevert --> ArgoSync
+
+    style Code fill:#4f46e5,color:#fff
+    style DevApp fill:#2563eb,color:#fff
+    style StagingApp fill:#7c3aed,color:#fff
+    style ProdApp fill:#059669,color:#fff
+    style ArgoSync fill:#dc2626,color:#fff

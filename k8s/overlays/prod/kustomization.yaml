@@ -1,0 +1,34 @@
+# overlays/prod/kustomization.yaml — Production environment overlay.
+#
+# Production has the strictest configuration:
+#   - 3 replicas for high availability
+#   - Higher resource limits
+#   - Warn-level logging (avoid verbose output in prod)
+#   - ArgoCD manual sync only (requires human approval)
+#   - PDB minAvailable: 2 (patched below)
+#
+# The OPA Gatekeeper "block-latest-tag" policy prevents :latest from ever
+# being deployed here — all prod images must use an explicit SHA tag.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: gitops-prod
+
+resources:
+  - ../../base
+
+patches:
+  - path: patches/replica-count.yaml
+  - path: patches/resource-limits.yaml
+  - path: patches/env-config.yaml
+  - path: patches/pdb-prod.yaml  # tighten PDB for prod HA
+
+images:
+  - name: ghcr.io/Parzivalart3mis/gitops-backend
+    newTag: latest  # promote.yml workflow sets a real SHA here (never :latest in prod)
+  - name: ghcr.io/Parzivalart3mis/gitops-frontend
+    newTag: latest
+
+commonLabels:
+  environment: prod

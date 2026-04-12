@@ -1,0 +1,67 @@
+# observability/loki/loki-values.yaml
+# Helm values for Grafana Loki (log aggregation) + Promtail (log shipping).
+#
+# Install:
+#   helm repo add grafana https://grafana.github.io/helm-charts
+#   helm install loki grafana/loki-stack \
+#     --namespace monitoring --create-namespace \
+#     --values observability/loki/loki-values.yaml
+#
+# Loki stores logs from all pods and makes them queryable from Grafana.
+# Our backend uses structured JSON logging (structlog), which Loki can
+# parse and filter by field.
+
+loki:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    enabled: false  # local dev: use memory; enable for production
+  config:
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+    storage_config:
+      boltdb_shipper:
+        active_index_directory: /data/loki/boltdb-shipper-active
+        cache_location: /data/loki/boltdb-shipper-cache
+        shared_store: filesystem
+      filesystem:
+        directory: /data/loki/chunks
+
+promtail:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  config:
+    snippets:
+      # Parse JSON logs from our backend for structured querying in Grafana
+      pipelineStages:
+        - json:
+            expressions:
+              level: level
+              logger: logger
+              timestamp: timestamp
+              event: event
+        - labels:
+            level:
+            logger:
+
+grafana:
+  enabled: false  # Grafana is installed separately

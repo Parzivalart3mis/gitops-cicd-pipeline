@@ -1,0 +1,81 @@
+# observability/prometheus/alerts/app-alerts.yaml
+# PrometheusRule CRD — Application-level alerting rules.
+# These rules target metrics from the FastAPI /metrics endpoint
+# (instrumented by prometheus-fastapi-instrumentator).
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: app-alerts
+  namespace: monitoring
+  labels:
+    app: kube-prometheus-stack
+    release: kube-prometheus-stack
+    team: platform
+spec:
+  groups:
+    - name: app-health
+      interval: 30s
+      rules:
+        # ----------------------------------------------------------------
+        # Alert: High HTTP error rate (5xx)
+        # ----------------------------------------------------------------
+        - alert: HighErrorRate
+          expr: |
+            rate(http_requests_total{
+              namespace=~"gitops-.*",
+              status=~"5.."
+            }[5m])
+            /
+            rate(http_requests_total{namespace=~"gitops-.*"}[5m])
+            > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "High 5xx error rate on {{ $labels.handler }}"
+            description: >
+              The error rate on {{ $labels.handler }} in {{ $labels.namespace }}
+              is {{ $value | humanizePercentage }}. Threshold is 5%.
+              Check application logs: kubectl logs -l app=backend -n {{ $labels.namespace }}
+
+        # ----------------------------------------------------------------
+        # Alert: High request latency (p99 > 2s)
+        # ----------------------------------------------------------------
+        - alert: HighRequestLatency
+          expr: |
+            histogram_quantile(0.99,
+              rate(http_request_duration_seconds_bucket{namespace=~"gitops-.*"}[5m])
+            ) > 2.0
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "High p99 latency on {{ $labels.handler }}"
+            description: >
+              p99 latency on {{ $labels.handler }} is {{ $value | humanizeDuration }}.
+              This may indicate high load, a slow dependency, or a memory leak.
+
+        # ----------------------------------------------------------------
+        # Alert: No requests received for 5 minutes (dead service)
+        # ----------------------------------------------------------------
+        - alert: NoTrafficReceived
+          expr: |
+            sum(rate(http_requests_total{
+              namespace=~"gitops-prod|gitops-staging",
+              handler!="/healthz",
+              handler!="/readyz",
+              handler!="/metrics"
+            }[5m])) by (namespace) == 0
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "No traffic in {{ $labels.namespace }} for 5 minutes"
+            description: >
+              No HTTP requests (excluding probes) have been received in
+              {{ $labels.namespace }} for 5 minutes. This may indicate a
+              networking issue or an Ingress misconfiguration.

@@ -1,0 +1,18 @@
+# patches/replica-count.yaml — 3 replicas for production HA.
+# Combined with minAvailable: 2 PDB and topology spread, this ensures
+# the service stays up during node maintenance and rolling updates.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+spec:
+  replicas: 3
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  replicas: 3

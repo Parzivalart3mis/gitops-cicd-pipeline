@@ -1,0 +1,46 @@
+# security/trivy/trivy-config.yaml — Trivy container image scanning configuration.
+#
+# Used by:
+#   1. The CI pipeline (GitHub Actions trivy-action)
+#   2. Local scanning: trivy image --config security/trivy/trivy-config.yaml <image>
+#
+# Trivy scans for:
+#   - OS package vulnerabilities (CVE database)
+#   - Language-specific dependency vulnerabilities (Python pip, Node npm, etc.)
+#   - Misconfigurations in Dockerfile and Kubernetes manifests
+#   - Exposed secrets in source code
+
+cache:
+  dir: /tmp/trivy-cache
+
+db:
+  skip-update: false  # always update the vulnerability DB in CI
+
+format: table   # override to 'sarif' or 'json' as needed
+severity:
+  - CRITICAL
+  - HIGH
+  - MEDIUM
+
+# Ignore vulnerabilities that have no available fix
+ignore-unfixed: true
+
+# Exit with code 1 if vulnerabilities at or above this severity are found
+exit-code: 1
+exit-on-eol-os: 0  # don't fail on end-of-life OS (handled separately)
+
+# Scan types to run
+scan:
+  security-checks:
+    - vuln       # CVE scanning
+    - config     # Dockerfile/k8s misconfiguration
+    - secret     # Exposed secrets
+
+# Skip specific files in filesystem scans
+skip-files:
+  - "**/.git/**"
+  - "**/node_modules/**"
+  - "**/__pycache__/**"
+
+# Ignore file — add known false positives here
+# ignorefile: security/trivy/.trivyignore

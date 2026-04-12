@@ -1,0 +1,46 @@
+# backend/hpa.yaml — HorizontalPodAutoscaler for the backend.
+#
+# Scales between minReplicas and maxReplicas based on average CPU utilisation.
+# Target of 70% means: if average CPU across all pods exceeds 70% of their
+# CPU *request*, the HPA adds more pods (up to maxReplicas).
+#
+# Note: minReplicas is overridden per environment via overlay patches so
+# prod can start at 3 and dev at 1.
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+  labels:
+    app: backend
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 1  # overridden per environment
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300  # wait 5 min before scaling down

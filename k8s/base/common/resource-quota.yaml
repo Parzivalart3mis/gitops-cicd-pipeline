@@ -1,0 +1,25 @@
+# common/resource-quota.yaml — Namespace-level resource quotas.
+#
+# ResourceQuotas prevent a single namespace from consuming all cluster
+# resources. These base values are intentionally generous; tighter limits
+# can be applied via overlay patches.
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gitops-quota
+  labels:
+    app.kubernetes.io/component: resource-quota
+spec:
+  hard:
+    # Compute
+    requests.cpu: "2"
+    limits.cpu: "4"
+    requests.memory: "1Gi"
+    limits.memory: "2Gi"
+    # Object counts
+    pods: "20"
+    services: "10"
+    configmaps: "20"
+    secrets: "20"
+    persistentvolumeclaims: "5"

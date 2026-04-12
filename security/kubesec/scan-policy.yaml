@@ -1,0 +1,49 @@
+# security/kubesec/scan-policy.yaml — kubesec scanning configuration.
+#
+# kubesec statically analyses Kubernetes manifests for security misconfigurations.
+# It scores manifests and reports which security controls are in place or missing.
+#
+# Usage:
+#   kubesec scan k8s/base/backend/deployment.yaml
+#   kubesec scan k8s/base/frontend/deployment.yaml
+#
+# Controls our manifests intentionally satisfy:
+#   ✅ runAsNonRoot: true           — containers run as non-root
+#   ✅ readOnlyRootFilesystem: true  — prevents writes to container FS
+#   ✅ capabilities.drop: [ALL]     — removes all Linux capabilities
+#   ✅ allowPrivilegeEscalation: false — no sudo inside containers
+#   ✅ resources.limits             — CPU and memory limits set
+#   ✅ seccompProfile               — RuntimeDefault seccomp profile
+#
+# Controls intentionally not applied (with justification):
+#   - AppArmor/SELinux profiles: not universally available on all nodes
+#   - runAsUser: 1 (arbitrary UID): using defined UIDs per container instead
+
+# This file is documentation-as-code: the actual scan policy is enforced
+# by kubesec itself. You can reference score thresholds in your CI scripts.
+#
+# Score guide (from kubesec docs):
+#   > 0: PASS (no critical issues)
+#   0:   WARNING (review recommended)
+#   < 0: FAIL (critical security issues present)
+#
+# Our CI enforces score >= 0 for all manifests.
+# Run locally: make scan
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubesec-scan-policy
+  labels:
+    app.kubernetes.io/component: security
+data:
+  description: |
+    kubesec score threshold: >= 0
+    Manifests scoring below 0 will fail the CI pipeline.
+
+    To run manually:
+      kubesec scan k8s/base/backend/deployment.yaml
+      kubesec scan k8s/base/frontend/deployment.yaml
+
+    Or use make:
+      make scan

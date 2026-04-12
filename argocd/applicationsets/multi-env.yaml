@@ -1,0 +1,76 @@
+# argocd/applicationsets/multi-env.yaml — ApplicationSet for all environments.
+#
+# An ApplicationSet generates ArgoCD Application resources automatically
+# from a template + a list generator. This eliminates the need to maintain
+# three near-identical Application YAML files (dev/staging/prod).
+#
+# In production GitOps setups, ApplicationSets are used to generate
+# Applications across hundreds of clusters or environments from a single
+# source of truth.
+#
+# Why we still have individual application files (applications/dev.yaml etc.):
+#   The individual files document per-environment nuances (auto-sync ON/OFF,
+#   sync windows, notes). The ApplicationSet is provided as an *alternative*
+#   pattern demonstration — use one or the other, not both simultaneously.
+
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: gitops-demo-environments
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    team: platform
+spec:
+  # Preserve Applications that were manually modified (don't overwrite)
+  syncPolicy:
+    preserveResourcesOnDeletion: false
+
+  generators:
+    - list:
+        elements:
+          - environment: dev
+            namespace: gitops-dev
+            autoSync: "true"
+            selfHeal: "true"
+            minReplicas: "1"
+          - environment: staging
+            namespace: gitops-staging
+            autoSync: "false"
+            selfHeal: "false"
+            minReplicas: "2"
+          - environment: prod
+            namespace: gitops-prod
+            autoSync: "false"
+            selfHeal: "false"
+            minReplicas: "3"
+
+  template:
+    metadata:
+      name: "gitops-demo-{{environment}}"
+      namespace: argocd
+      labels:
+        environment: "{{environment}}"
+        team: platform
+        generated-by: applicationset
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: gitops-demo
+      source:
+        repoURL: https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git
+        targetRevision: main
+        path: "k8s/overlays/{{environment}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{namespace}}"
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+      ignoreDifferences:
+        - group: apps
+          kind: Deployment
+          jsonPointers:
+            - /spec/replicas

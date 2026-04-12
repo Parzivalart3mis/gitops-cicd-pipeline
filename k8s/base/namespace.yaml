@@ -1,0 +1,19 @@
+# namespace.yaml — Base namespace definition.
+# Actual namespace names are set per-environment in the Kustomize overlays
+# using the `namespace:` field in kustomization.yaml. This base manifest
+# is intentionally minimal so overlays can override freely.
+#
+# Note: ArgoCD is configured with syncOptions.CreateNamespace=true, so
+# it creates the namespace automatically on first sync. This manifest
+# exists so we can attach labels (required by OPA policies).
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gitops-app  # overridden by each overlay
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/part-of: gitops-demo
+    # OPA Gatekeeper policy: all namespaces must have these labels
+    team: platform
+    environment: base  # overridden per environment

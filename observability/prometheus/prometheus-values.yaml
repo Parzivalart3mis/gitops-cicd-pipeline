@@ -1,0 +1,86 @@
+# observability/prometheus/prometheus-values.yaml
+# Helm values for kube-prometheus-stack (includes Prometheus + Alertmanager + Grafana).
+#
+# Install:
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+#     --namespace monitoring --create-namespace \
+#     --values observability/prometheus/prometheus-values.yaml
+
+prometheus:
+  prometheusSpec:
+    # Scrape interval — 15s is standard; increase to 30s on resource-constrained clusters
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    # Retention: 15 days locally, would be longer in production with remote write
+    retention: 15d
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+    # Discover ServiceMonitor CRDs from ALL namespaces (not just monitoring)
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+
+    podMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelector: {}
+    podMonitorNamespaceSelector: {}
+
+    # Also load our custom alert rules
+    ruleSelectorNilUsesHelmValues: false
+    ruleSelector: {}
+    ruleNamespaceSelector: {}
+
+    # Additional scrape configs for pods with prometheus.io/scrape: "true" annotations
+    additionalScrapeConfigs:
+      - job_name: 'kubernetes-pods-annotation'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+
+# We configure Grafana separately via grafana-values.yaml
+grafana:
+  enabled: false
+
+# Node exporter — scrapes host-level metrics
+nodeExporter:
+  enabled: true
+
+# kube-state-metrics — scrapes Kubernetes object metrics (pods, deployments, etc.)
+kubeStateMetrics:
+  enabled: true

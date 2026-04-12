@@ -1,0 +1,37 @@
+# overlays/dev/kustomization.yaml — Development environment overlay.
+#
+# Dev is the first environment in the promotion chain. The CI pipeline
+# automatically updates the image tags here on every push to main.
+# ArgoCD is configured to auto-sync dev, so every merge to main
+# triggers a deployment to dev within ~60 seconds.
+#
+# Dev profile: single replica, low resource limits, debug logging.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: gitops-dev
+
+resources:
+  - ../../base
+
+# Patches are applied in order. Each patch file uses a strategic merge
+# so only specified fields are overridden — everything else inherits from base.
+patches:
+  - path: patches/replica-count.yaml
+  - path: patches/resource-limits.yaml
+  - path: patches/env-config.yaml
+
+# images[] is the mechanism the CI pipeline uses to update image tags.
+# The CI job runs: kustomize edit set image ghcr.io/Parzivalart3mis/gitops-backend=ghcr.io/Parzivalart3mis/gitops-backend:<SHA>
+# That command updates the newTag field below in-place, then commits the change.
+# ArgoCD detects the git commit and syncs.
+images:
+  - name: ghcr.io/Parzivalart3mis/gitops-backend
+    newTag: latest  # CI pipeline updates this field
+  - name: ghcr.io/Parzivalart3mis/gitops-frontend
+    newTag: latest  # CI pipeline updates this field
+
+# Add environment label to all resources in this overlay
+commonLabels:
+  environment: dev

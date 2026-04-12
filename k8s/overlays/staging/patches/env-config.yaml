@@ -1,0 +1,17 @@
+# patches/env-config.yaml — Staging environment config.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  environment: "staging"
+  log_level: "info"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+data:
+  backend_url: "http://backend.gitops-staging.svc.cluster.local:8000"

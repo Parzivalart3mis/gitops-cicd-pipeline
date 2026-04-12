@@ -1,0 +1,31 @@
+# observability/prometheus/service-monitor.yaml
+# ServiceMonitor CRD — tells the Prometheus operator which services to scrape.
+#
+# This is the recommended way to configure Prometheus scraping when using
+# the kube-prometheus-stack. The operator watches ServiceMonitor resources
+# and automatically generates Prometheus scrape configs from them.
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gitops-backend
+  namespace: monitoring
+  labels:
+    app: backend
+    release: kube-prometheus-stack  # must match Prometheus operator selector
+    team: platform
+spec:
+  # Select backend Services across all gitops-* namespaces
+  namespaceSelector:
+    matchNames:
+      - gitops-dev
+      - gitops-staging
+      - gitops-prod
+  selector:
+    matchLabels:
+      app: backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

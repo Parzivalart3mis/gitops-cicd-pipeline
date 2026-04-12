@@ -1,0 +1,36 @@
+# k8s/base/kustomization.yaml — Root Kustomize base configuration.
+#
+# Contains all resources shared across environments. Environment-specific
+# overrides (replica counts, resource limits, image tags) live in overlays/.
+#
+# Why Kustomize instead of Helm?
+#   - No templating language to learn; pure YAML with strategic merge patches.
+#   - kubectl kustomize is built-in since kubectl v1.14 — zero extra tooling.
+#   - Overlays compose cleanly with Git diffs; Helm values are opaque.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - backend/serviceaccount.yaml
+  - backend/deployment.yaml
+  - backend/service.yaml
+  - backend/configmap.yaml
+  - backend/hpa.yaml
+  - backend/ingress.yaml
+  - frontend/deployment.yaml
+  - frontend/service.yaml
+  - frontend/configmap.yaml
+  - frontend/hpa.yaml
+  - frontend/ingress.yaml
+  - common/network-policy.yaml
+  - common/resource-quota.yaml
+  - common/pod-disruption-budget.yaml
+
+# Common labels applied to ALL resources in this base.
+# Overlays inherit these and can add more.
+commonLabels:
+  app.kubernetes.io/part-of: gitops-demo
+  app.kubernetes.io/managed-by: kustomize
+  team: platform

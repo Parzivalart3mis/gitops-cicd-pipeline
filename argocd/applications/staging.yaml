@@ -1,0 +1,50 @@
+# argocd/applications/staging.yaml — ArgoCD Application for staging.
+#
+# Staging is NOT auto-synced. A human (or the promote.yml workflow) must
+# trigger sync after verifying dev looks good.
+# This is a deliberate gate in the promotion chain.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitops-demo-staging
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: gitops-demo-staging
+    app.kubernetes.io/part-of: gitops-demo
+    environment: staging
+    team: platform
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: gitops-demo
+
+  source:
+    repoURL: https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git
+    targetRevision: main
+    path: k8s/overlays/staging
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gitops-staging
+
+  syncPolicy:
+    # No automated sync — staging requires manual approval
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m
+
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+  revisionHistoryLimit: 10

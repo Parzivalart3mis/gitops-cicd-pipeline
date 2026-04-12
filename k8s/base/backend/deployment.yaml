@@ -1,0 +1,137 @@
+# backend/deployment.yaml — Kubernetes Deployment for the FastAPI backend.
+#
+# Key production-readiness features included here:
+#   - Non-root security context (runAsNonRoot: true)
+#   - Liveness, readiness, AND startup probes (prevents traffic to unhealthy pods)
+#   - Zero-downtime rolling update (maxUnavailable: 0)
+#   - revisionHistoryLimit: 5 (enables kubectl rollout undo)
+#   - Resource requests AND limits on every container
+#   - Prometheus scrape annotations
+#
+# Image tag is intentionally 'latest' here; each Kustomize overlay sets
+# the real tag via the images[] transformer so CI writes a single line.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1  # base value — overridden per environment
+  revisionHistoryLimit: 5  # keep 5 old ReplicaSets so kubectl rollout undo works
+  selector:
+    matchLabels:
+      app: backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # create 1 new pod before killing old ones
+      maxUnavailable: 0  # never kill a pod unless a replacement is healthy
+  template:
+    metadata:
+      labels:
+        app: backend
+        app.kubernetes.io/name: backend
+        app.kubernetes.io/component: api
+      annotations:
+        # Prometheus will scrape pods with these annotations automatically
+        # when using the default scrape config shipped with kube-prometheus-stack.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: backend
+      # Pod-level security context — applies to all containers
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Ensure pods are spread across nodes for HA (best-effort)
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: backend
+      containers:
+        - name: backend
+          # Placeholder image — kustomize overlay sets the real tag via images[]
+          image: ghcr.io/Parzivalart3mis/gitops-backend:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: environment
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: log_level
+            - name: GIT_SHA
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: git_sha
+          # Container-level security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          # Startup probe: gives the app up to 60 s to pass its first health check.
+          # Only after the startup probe succeeds do liveness/readiness kick in.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12  # 12 × 5s = 60s max startup time
+            timeoutSeconds: 3
+          # Liveness probe: restart the container if it becomes unresponsive.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Readiness probe: remove pod from Service endpoints if not ready.
+          # /readyz returns 503 until the FastAPI lifespan startup completes.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # tmpdir needed because readOnlyRootFilesystem=true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

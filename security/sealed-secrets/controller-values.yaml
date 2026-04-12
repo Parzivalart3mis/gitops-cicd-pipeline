@@ -1,0 +1,37 @@
+# security/sealed-secrets/controller-values.yaml
+# Helm values for the Bitnami Sealed Secrets controller.
+#
+# Install:
+#   helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
+#   helm install sealed-secrets sealed-secrets/sealed-secrets \
+#     --namespace kube-system \
+#     --values security/sealed-secrets/controller-values.yaml
+#
+# How Sealed Secrets works:
+#   1. You create a regular Kubernetes Secret locally.
+#   2. You encrypt it with `kubeseal` using the controller's public key.
+#   3. The resulting SealedSecret (encrypted YAML) is safe to commit to Git.
+#   4. The controller running in the cluster decrypts it and creates the real Secret.
+#   5. The real Secret is never stored in Git — only the SealedSecret is.
+#
+# This is simpler than HashiCorp Vault for a portfolio demo while demonstrating
+# the correct principle: never commit plaintext secrets to Git.
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Automatically renew the encryption key pair every 30 days
+keyrenewperiod: "720h"  # 30 days
+
+# Label to identify SealedSecret objects managed by this controller
+additionalNamespaces: []  # controller manages secrets in all namespaces by default
+
+metrics:
+  # Expose Prometheus metrics on /metrics
+  serviceMonitor:
+    enabled: false  # enable if you have the Prometheus operator installed

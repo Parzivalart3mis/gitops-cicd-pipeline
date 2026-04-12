@@ -1,0 +1,15 @@
+# frontend/configmap.yaml — Runtime configuration injected into the frontend container.
+# BACKEND_URL is the URL the browser uses to call the backend API.
+# In-cluster: the Ingress exposes the backend at a known hostname.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  labels:
+    app: frontend
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/component: config
+data:
+  backend_url: "http://backend.gitops.local"  # overridden per environment
+  frontend_version: "unknown"                  # set by CI pipeline

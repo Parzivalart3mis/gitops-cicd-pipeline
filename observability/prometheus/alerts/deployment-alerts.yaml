@@ -1,0 +1,110 @@
+# observability/prometheus/alerts/deployment-alerts.yaml
+# PrometheusRule CRD — Alerting rules for deployment health.
+#
+# Apply: kubectl apply -f observability/prometheus/alerts/deployment-alerts.yaml -n monitoring
+# Or let ArgoCD manage this file if you add it to the observability Application.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: deployment-alerts
+  namespace: monitoring
+  labels:
+    app: kube-prometheus-stack
+    release: kube-prometheus-stack  # must match the Prometheus operator label selector
+    team: platform
+spec:
+  groups:
+    - name: deployment-health
+      interval: 30s
+      rules:
+        # ----------------------------------------------------------------
+        # Alert: Pod restarting frequently (CrashLoopBackOff indicator)
+        # ----------------------------------------------------------------
+        - alert: HighPodRestartRate
+          expr: increase(kube_pod_container_status_restarts_total{namespace=~"gitops-.*"}[1h]) > 3
+          for: 5m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Pod {{ $labels.pod }} restarting frequently"
+            description: >
+              Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has restarted
+              {{ $value | printf "%.0f" }} times in the last hour.
+              This often indicates a crash loop (OOMKill, bad config, failing startup probe).
+            runbook: "https://github.com/Parzivalart3mis/gitops-cicd-pipeline/blob/main/docs/TROUBLESHOOTING.md#high-pod-restart-rate"
+
+        # ----------------------------------------------------------------
+        # Alert: Deployment has fewer ready replicas than desired
+        # ----------------------------------------------------------------
+        - alert: DeploymentReplicasMismatch
+          expr: |
+            kube_deployment_spec_replicas{namespace=~"gitops-.*"}
+            != kube_deployment_status_ready_replicas{namespace=~"gitops-.*"}
+          for: 10m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} has unavailable replicas"
+            description: >
+              Deployment {{ $labels.deployment }} in {{ $labels.namespace }} has
+              {{ $value }} unavailable replicas. Expected all replicas to be ready within 10 minutes.
+              Check: kubectl describe deployment {{ $labels.deployment }} -n {{ $labels.namespace }}
+            runbook: "https://github.com/Parzivalart3mis/gitops-cicd-pipeline/blob/main/docs/TROUBLESHOOTING.md#deployment-replicas-mismatch"
+
+        # ----------------------------------------------------------------
+        # Alert: Deployment has been progressing too long (stuck rollout)
+        # ----------------------------------------------------------------
+        - alert: DeploymentRolloutStuck
+          expr: |
+            kube_deployment_status_condition{
+              namespace=~"gitops-.*",
+              condition="Progressing",
+              status="false"
+            } == 1
+          for: 15m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} rollout is stuck"
+            description: >
+              Deployment {{ $labels.deployment }} in {{ $labels.namespace }} has been stuck
+              for 15 minutes. Check pod events and resource availability.
+
+        # ----------------------------------------------------------------
+        # Alert: Pod OOMKilled
+        # ----------------------------------------------------------------
+        - alert: PodOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{
+              namespace=~"gitops-.*",
+              reason="OOMKilled"
+            } == 1
+          for: 0m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Container {{ $labels.container }} OOMKilled in pod {{ $labels.pod }}"
+            description: >
+              Container {{ $labels.container }} in pod {{ $labels.pod }} was killed due to
+              out-of-memory. Consider increasing the memory limit in the deployment manifest.
+
+        # ----------------------------------------------------------------
+        # Alert: ArgoCD Application out of sync for too long
+        # ----------------------------------------------------------------
+        - alert: ArgoCDAppOutOfSync
+          expr: |
+            argocd_app_info{sync_status="OutOfSync"} == 1
+          for: 30m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "ArgoCD Application {{ $labels.name }} is out of sync"
+            description: >
+              ArgoCD Application {{ $labels.name }} has been OutOfSync for 30 minutes.
+              Either a sync is needed (staging/prod with manual sync) or auto-sync is failing.

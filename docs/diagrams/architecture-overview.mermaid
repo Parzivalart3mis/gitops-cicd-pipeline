@@ -1,0 +1,82 @@
+---
+title: System Architecture Overview
+---
+graph TB
+    subgraph External ["🌐 External"]
+        Dev[Developer\nWorkstation]
+        Browser[End User\nBrowser]
+        GH[GitHub\nRepository]
+        GHCR[GitHub Container\nRegistry GHCR]
+    end
+
+    subgraph CI ["⚙️ GitHub Actions"]
+        CI_Lint[Lint & Test]
+        CI_Scan[Security Scan\nTrivy + kubesec]
+        CI_Build[Build & Push\nDocker Images]
+        CI_Manifest[Update k8s\nManifests]
+    end
+
+    subgraph Kind ["☸️ Kind Cluster (Local)"]
+        subgraph ArgoNS ["argocd namespace"]
+            ArgoCD[ArgoCD Server\nReconciliation Engine]
+        end
+
+        subgraph MonNS ["monitoring namespace"]
+            Prometheus[Prometheus\nMetrics Store]
+            Grafana[Grafana\nDashboards]
+            Loki[Loki\nLog Store]
+        end
+
+        subgraph IngressNS ["ingress-nginx namespace"]
+            Ingress[Nginx Ingress\nController]
+        end
+
+        subgraph DevNS ["gitops-dev namespace"]
+            FrontendDev[Frontend Pods\nNginx ×1]
+            BackendDev[Backend Pods\nFastAPI ×1]
+            HPADev[HPA]
+        end
+
+        subgraph StagingNS ["gitops-staging namespace"]
+            FrontendStg[Frontend Pods\nNginx ×2]
+            BackendStg[Backend Pods\nFastAPI ×2]
+        end
+
+        subgraph ProdNS ["gitops-prod namespace"]
+            FrontendProd[Frontend Pods\nNginx ×3]
+            BackendProd[Backend Pods\nFastAPI ×3]
+            PDB[PodDisruptionBudget\nminAvailable: 2]
+        end
+
+        subgraph Security ["Security"]
+            OPA[OPA Gatekeeper\nPolicy Enforcement]
+            SS[Sealed Secrets\nController]
+        end
+    end
+
+    Dev -->|git push| GH
+    GH -->|trigger| CI
+    CI_Lint --> CI_Scan --> CI_Build --> CI_Manifest
+    CI_Build -->|docker push| GHCR
+    CI_Manifest -->|git commit| GH
+    GH -->|poll every 3 min| ArgoCD
+    ArgoCD -->|kubectl apply| DevNS
+    ArgoCD -->|manual sync| StagingNS
+    ArgoCD -->|manual sync| ProdNS
+    GHCR -->|pull image| DevNS
+    GHCR -->|pull image| StagingNS
+    GHCR -->|pull image| ProdNS
+    Browser -->|HTTP| Ingress
+    Ingress --> FrontendDev
+    FrontendDev -->|API calls| BackendDev
+    BackendDev -->|/metrics| Prometheus
+    Prometheus --> Grafana
+    OPA -->|admission webhook| DevNS
+    OPA -->|admission webhook| StagingNS
+    OPA -->|admission webhook| ProdNS
+    SS -->|decrypt| DevNS
+
+    style ArgoCD fill:#ef4444,color:#fff
+    style Prometheus fill:#e97316,color:#fff
+    style Grafana fill:#22c55e,color:#fff
+    style OPA fill:#8b5cf6,color:#fff

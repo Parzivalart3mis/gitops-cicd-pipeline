@@ -1,0 +1,32 @@
+# overlays/staging/kustomization.yaml — Staging environment overlay.
+#
+# Staging mirrors production configuration as closely as possible.
+# It is the gate before production: images must pass all tests AND be
+# manually approved before they are promoted here.
+#
+# ArgoCD does NOT auto-sync staging — a human (or the promote.yml workflow)
+# must trigger sync. This prevents untested code from reaching a shared env.
+#
+# Staging profile: 2 replicas, production-like resources, info logging.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: gitops-staging
+
+resources:
+  - ../../base
+
+patches:
+  - path: patches/replica-count.yaml
+  - path: patches/resource-limits.yaml
+  - path: patches/env-config.yaml
+
+images:
+  - name: ghcr.io/Parzivalart3mis/gitops-backend
+    newTag: latest  # promote.yml workflow updates this field
+  - name: ghcr.io/Parzivalart3mis/gitops-frontend
+    newTag: latest
+
+commonLabels:
+  environment: staging

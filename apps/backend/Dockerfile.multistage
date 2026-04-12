@@ -1,0 +1,68 @@
+# Dockerfile.multistage — optimised multi-stage build for the backend.
+#
+# Stage 1 (test): installs all dependencies and runs pytest.
+#   The build fails here if any test fails, so bad code can never
+#   produce a production image.
+#
+# Stage 2 (production): copies only the application source from the
+#   build context (no test code), runs as a non-root user, and has a
+#   minimal attack surface.
+#
+# This is the Dockerfile used by the CI pipeline's build-and-push job.
+
+# ---------------------------------------------------------------------------
+# Stage 1 — test runner
+# ---------------------------------------------------------------------------
+FROM python:3.12.4-slim AS test
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy entire source including tests for this stage.
+COPY . .
+
+# Fail the build if tests don't pass or coverage drops below 80 %.
+RUN pytest src/tests/ -v --tb=short \
+        --cov=src \
+        --cov-report=term-missing \
+        --cov-fail-under=80
+
+# ---------------------------------------------------------------------------
+# Stage 2 — production image
+# ---------------------------------------------------------------------------
+FROM python:3.12.4-slim AS production
+
+LABEL org.opencontainers.image.source="https://github.com/Parzivalart3mis/gitops-cicd-pipeline"
+LABEL org.opencontainers.image.description="GitOps demo backend (production)"
+LABEL org.opencontainers.image.licenses="MIT"
+
+WORKDIR /app
+
+# Create a dedicated system user; never run application code as root.
+RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+
+COPY requirements.txt .
+# Install only production deps (tests are not run in this stage).
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy only the application source — tests are excluded via .dockerignore.
+COPY src/ ./src/
+
+# Drop to non-root before the CMD so the process runs without elevated privileges.
+USER appuser
+
+EXPOSE 8000
+
+# Kubernetes probes call /healthz; this HEALTHCHECK mirrors that probe locally.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')" || exit 1
+
+# GIT_SHA and ENVIRONMENT are injected at runtime via Kubernetes ConfigMap / env vars.
+# Default values here prevent crashes if env vars are missing in local dev.
+ENV GIT_SHA=unknown \
+    ENVIRONMENT=local \
+    LOG_LEVEL=info
+
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

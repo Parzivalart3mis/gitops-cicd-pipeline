@@ -1,0 +1,55 @@
+# backend/ingress.yaml — Ingress rule for the backend API.
+#
+# Routes /api/* and /metrics traffic from the ingress controller to the
+# backend Service. The ingress controller (Nginx Ingress) handles TLS
+# termination in cloud environments; locally we skip TLS.
+#
+# Hostname is templated as a placeholder — overlays set the real hostname
+# via a strategic merge patch on spec.rules[0].host.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: backend
+  labels:
+    app: backend
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/component: api
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: backend.gitops.local  # overridden by overlay
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  name: http
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: backend
+                port:
+                  name: http
+          - path: /readyz
+            pathType: Exact
+            backend:
+              service:
+                name: backend
+                port:
+                  name: http
+          - path: /metrics
+            pathType: Exact
+            backend:
+              service:
+                name: backend
+                port:
+                  name: http

@@ -1,0 +1,125 @@
+# common/network-policy.yaml — Pod-to-pod network policies.
+#
+# By default in Kubernetes all pods can talk to all other pods, which is
+# a violation of the principle of least privilege. These NetworkPolicy
+# resources restrict traffic so:
+#   - Frontend pods can only receive ingress traffic from the Ingress controller.
+#   - Backend pods can only receive traffic FROM frontend pods and the Ingress controller.
+#   - No east-west traffic is allowed unless explicitly permitted.
+#
+# Requires a CNI that supports NetworkPolicy (Calico, Cilium, etc.).
+# Kind's default CNI (kindnet) does NOT enforce NetworkPolicy — install
+# Calico with: `kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml`
+
+# ---------------------------------------------------------------------------
+# Default deny: block all ingress and egress by default
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  labels:
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}  # applies to all pods in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# ---------------------------------------------------------------------------
+# Allow DNS egress (required for service discovery)
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  labels:
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+# ---------------------------------------------------------------------------
+# Backend: allow ingress from frontend and Ingress controller
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-allow-ingress
+  labels:
+    app: backend
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow from frontend pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - port: 8000
+    # Allow from Ingress controller (typically in ingress-nginx namespace)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8000
+    # Allow Prometheus scraping
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8000
+  egress:
+    - {}  # backend can egress freely (e.g., external DB calls)
+
+---
+# ---------------------------------------------------------------------------
+# Frontend: allow ingress from Ingress controller only
+# ---------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-allow-ingress
+  labels:
+    app: frontend
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - port: 8080
+  egress:
+    # Frontend pods need to reach the backend service
+    - to:
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - port: 8000

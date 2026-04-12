@@ -1,0 +1,39 @@
+---
+title: CI/CD Pipeline Flow
+---
+graph LR
+    A[👨‍💻 Developer Push] --> B[GitHub Actions CI]
+    B --> C{Tests Pass?}
+    C -->|No| D[❌ Pipeline Failed\nNotify Developer]
+    C -->|Yes| E[Build Docker Image\nmulti-stage Dockerfile]
+    E --> F[Security Scan\nTrivy + kubesec]
+    F --> G{Vulnerabilities?}
+    G -->|CRITICAL| D
+    G -->|Clean| H[Push to GHCR\nghcr.io/Parzivalart3mis/image:SHA]
+    H --> I[Update k8s/overlays/dev\nkustomize edit set image]
+    I --> J[Git Commit\nchore: update dev images to SHA]
+    J --> K[ArgoCD Detects\nPolls Git every 3 min]
+    K --> L[Diff: Desired vs Actual]
+    L --> M{Out of Sync?}
+    M -->|No| N[✅ Already in sync]
+    M -->|Yes| O[Sync: kubectl apply]
+    O --> P[Rolling Update\nmaxUnavailable=0]
+    P --> Q[Health Checks\nliveness + readiness probes]
+    Q --> R[✅ Deployed to Dev]
+    R --> S[Promote?\nmanual workflow dispatch]
+    S --> T[k8s/overlays/staging\npromote.yml updates tag]
+    T --> U[Manual ArgoCD Sync\nfor staging]
+    U --> V[✅ Deployed to Staging]
+    V --> W[Promote to Prod?\nmanual approval]
+    W --> X[k8s/overlays/prod\npromote.yml updates tag]
+    X --> Y[Manual ArgoCD Sync\nfor prod]
+    Y --> Z[✅ Deployed to Production]
+
+    style A fill:#4f46e5,color:#fff
+    style D fill:#ef4444,color:#fff
+    style N fill:#22c55e,color:#fff
+    style R fill:#22c55e,color:#fff
+    style V fill:#22c55e,color:#fff
+    style Z fill:#22c55e,color:#fff
+    style J fill:#f59e0b,color:#fff
+    style K fill:#6366f1,color:#fff

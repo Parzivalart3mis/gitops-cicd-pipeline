@@ -3,7 +3,7 @@
 # The entrypoint script injects runtime environment variables.
 # For production use Dockerfile.multistage.
 
-FROM nginx:1.27.0-alpine
+FROM nginx:1.27-alpine
 
 LABEL org.opencontainers.image.source="https://github.com/Parzivalart3mis/gitops-cicd-pipeline"
 LABEL org.opencontainers.image.description="GitOps demo frontend"

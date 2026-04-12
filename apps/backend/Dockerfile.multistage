@@ -13,7 +13,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1 — test runner
 # ---------------------------------------------------------------------------
-FROM python:3.12.4-slim AS test
+FROM python:3.12-slim AS test
 
 WORKDIR /app
 
@@ -32,7 +32,7 @@ RUN pytest src/tests/ -v --tb=short \
 # ---------------------------------------------------------------------------
 # Stage 2 — production image
 # ---------------------------------------------------------------------------
-FROM python:3.12.4-slim AS production
+FROM python:3.12-slim AS production
 
 LABEL org.opencontainers.image.source="https://github.com/Parzivalart3mis/gitops-cicd-pipeline"
 LABEL org.opencontainers.image.description="GitOps demo backend (production)"

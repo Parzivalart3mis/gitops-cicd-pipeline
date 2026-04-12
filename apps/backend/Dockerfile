@@ -3,7 +3,7 @@
 # by the CI pipeline rather than a multi-stage build.
 # For production-optimised builds use Dockerfile.multistage.
 
-FROM python:3.12.4-slim
+FROM python:3.12-slim
 
 LABEL org.opencontainers.image.source="https://github.com/Parzivalart3mis/gitops-cicd-pipeline"
 LABEL org.opencontainers.image.description="GitOps demo backend (development)"

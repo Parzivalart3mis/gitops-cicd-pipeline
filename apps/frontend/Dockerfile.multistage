@@ -31,7 +31,7 @@ RUN cp -r src/ dist/
 # ---------------------------------------------------------------------------
 # Stage 2 — production Nginx image
 # ---------------------------------------------------------------------------
-FROM nginx:1.27.0-alpine AS production
+FROM nginx:1.27-alpine AS production
 
 LABEL org.opencontainers.image.source="https://github.com/Parzivalart3mis/gitops-cicd-pipeline"
 LABEL org.opencontainers.image.description="GitOps demo frontend (production)"

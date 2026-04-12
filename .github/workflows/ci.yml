@@ -282,7 +282,8 @@ jobs:
           image-ref: ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/gitops-${{ matrix.app }}:${{ steps.meta.outputs.version }}
           format: table
           severity: CRITICAL
-          exit-code: "1"  # fail on CRITICAL vulnerabilities in the final image
+          ignore-unfixed: true  # skip CVEs with no available fix (e.g. will_not_fix OS packages)
+          exit-code: "1"  # fail on CRITICAL vulnerabilities that DO have a fix available
 
   # ---------------------------------------------------------------------------
   # Job 4: Update Kubernetes Manifests (the GitOps commit)

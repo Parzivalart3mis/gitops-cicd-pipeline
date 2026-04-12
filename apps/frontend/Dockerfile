@@ -9,6 +9,10 @@ LABEL org.opencontainers.image.source="https://github.com/Parzivalart3mis/gitops
 LABEL org.opencontainers.image.description="GitOps demo frontend"
 LABEL org.opencontainers.image.licenses="MIT"
 
+# Upgrade Alpine packages to pull the latest security patches at build time.
+# The base nginx image may ship with outdated packages even on the latest tag.
+RUN apk upgrade --no-cache
+
 # Remove the default Nginx configuration and replace with ours.
 RUN rm /etc/nginx/conf.d/default.conf
 

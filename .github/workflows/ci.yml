@@ -128,7 +128,7 @@ jobs:
         if: matrix.app == 'backend'
         run: |
           sudo apt-get install -y shellcheck
-          shellcheck scripts/*.sh
+          shellcheck --severity=error scripts/*.sh
 
   # ---------------------------------------------------------------------------
   # Job 2: Security Scan

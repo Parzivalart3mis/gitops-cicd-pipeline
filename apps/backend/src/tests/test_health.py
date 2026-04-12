@@ -5,8 +5,6 @@ These endpoints are critical because Kubernetes liveness and readiness
 probes depend on them returning correct HTTP status codes and payloads.
 """
 
-import os
-
 import pytest
 from fastapi.testclient import TestClient
 

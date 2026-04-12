@@ -8,7 +8,6 @@ in live demos that a new image version was successfully deployed.
 """
 
 import os
-import uuid
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -19,7 +18,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from .routes import items as items_router
-from .models.item import Item, ItemCreate
 
 # ---------------------------------------------------------------------------
 # Structured logging setup

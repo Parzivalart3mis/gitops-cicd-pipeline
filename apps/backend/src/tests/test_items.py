@@ -5,7 +5,6 @@ Covers the happy path and common error scenarios for list, create,
 get-by-id, and delete operations.
 """
 
-import pytest
 from fastapi.testclient import TestClient
 
 

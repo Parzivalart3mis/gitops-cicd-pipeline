@@ -13,24 +13,30 @@ kind: Kustomization
 namespace: gitops-dev
 
 resources:
-  - ../../base
+- ../../base
 
 # Patches are applied in order. Each patch file uses a strategic merge
 # so only specified fields are overridden — everything else inherits from base.
 patches:
-  - path: patches/replica-count.yaml
-  - path: patches/resource-limits.yaml
-  - path: patches/env-config.yaml
+- path: patches/replica-count.yaml
+- path: patches/resource-limits.yaml
+- path: patches/env-config.yaml
 
 # images[] is the mechanism the CI pipeline uses to update image tags.
 # The CI job runs: kustomize edit set image ghcr.io/Parzivalart3mis/gitops-backend=ghcr.io/Parzivalart3mis/gitops-backend:<SHA>
 # That command updates the newTag field below in-place, then commits the change.
 # ArgoCD detects the git commit and syncs.
 images:
-  - name: ghcr.io/Parzivalart3mis/gitops-backend
-    newTag: latest  # CI pipeline updates this field
-  - name: ghcr.io/Parzivalart3mis/gitops-frontend
-    newTag: latest  # CI pipeline updates this field
+- name: ghcr.io/Parzivalart3mis/gitops-backend
+  newTag: latest
+- name: ghcr.io/Parzivalart3mis/gitops-frontend
+  newTag: latest
+- name: ghcr.io/parzivalart3mis/gitops-backend
+  newName: ghcr.io/parzivalart3mis/gitops-backend
+  newTag: 8a139d1
+- name: ghcr.io/parzivalart3mis/gitops-frontend
+  newName: ghcr.io/parzivalart3mis/gitops-frontend
+  newTag: 8a139d1
 
 # Add environment label to all resources in this overlay
 commonLabels:

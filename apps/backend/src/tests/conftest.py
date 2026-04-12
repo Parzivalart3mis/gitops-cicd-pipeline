@@ -22,6 +22,10 @@ def clear_store() -> None:
 
 
 @pytest.fixture
-def client() -> TestClient:
-    """Return a synchronous test client wrapping the FastAPI app."""
-    return TestClient(app)
+def client():
+    """Return a synchronous test client wrapping the FastAPI app.
+    Using the context manager form triggers the lifespan (startup/shutdown),
+    which sets _app_ready = True so /readyz returns 200 during tests.
+    """
+    with TestClient(app) as c:
+        yield c

@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitOps CI/CD Pipeline — Production-Grade Delivery Automation</title>
+  <meta name="description" content="A production-grade GitOps CI/CD pipeline demonstrating end-to-end software delivery with GitHub Actions, ArgoCD, Kubernetes, and a full observability stack — runnable on a single machine with Kind." />
+  <meta name="author" content="Yash Sharma" />
+  <meta name="theme-color" content="#0a0e1a" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="GitOps CI/CD Pipeline" />
+  <meta property="og:description" content="End-to-end software delivery automation with GitHub Actions, ArgoCD, Kubernetes, and full observability." />
+  <meta property="og:url" content="https://github.com/Parzivalart3mis/gitops-cicd-pipeline" />
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%99%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --bg: #0a0e1a;
+      --bg-soft: #0f1524;
+      --panel: #121a2c;
+      --panel-2: #161f33;
+      --border: #22304d;
+      --text: #e6ecf5;
+      --muted: #96a3bd;
+      --dim: #6b7893;
+      --accent: #38bdf8;
+      --accent-2: #818cf8;
+      --accent-3: #34d399;
+      --accent-warn: #fbbf24;
+      --accent-red: #f87171;
+      --grad: linear-gradient(135deg, #38bdf8 0%, #818cf8 55%, #c084fc 100%);
+      --grad-soft: linear-gradient(135deg, rgba(56,189,248,.14), rgba(129,140,248,.14));
+      --radius: 16px;
+      --shadow: 0 20px 50px -20px rgba(0,0,0,.6);
+      --maxw: 1140px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; scroll-padding-top: 80px; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    a { color: inherit; text-decoration: none; }
+    code, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+    .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+    .grad-text {
+      background: var(--grad);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    /* ---------- NAV ---------- */
+    header.nav {
+      position: sticky; top: 0; z-index: 50;
+      backdrop-filter: blur(14px);
+      background: rgba(10,14,26,.72);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 68px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.02em; }
+    .brand .logo {
+      width: 34px; height: 34px; border-radius: 9px;
+      background: var(--grad);
+      display: grid; place-items: center; font-size: 18px;
+      box-shadow: 0 6px 18px -6px rgba(56,189,248,.6);
+    }
+    .nav-links { display: flex; align-items: center; gap: 28px; }
+    .nav-links a { color: var(--muted); font-size: 14.5px; font-weight: 500; transition: color .2s; }
+    .nav-links a:hover { color: var(--text); }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 18px; border-radius: 10px; font-weight: 600; font-size: 14.5px;
+      transition: transform .15s ease, box-shadow .2s ease, background .2s ease;
+    }
+    .btn-primary { background: var(--grad); color: #06101f; box-shadow: 0 8px 22px -8px rgba(56,189,248,.6); }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 14px 30px -10px rgba(56,189,248,.7); }
+    .btn-ghost { border: 1px solid var(--border); color: var(--text); background: var(--panel); }
+    .btn-ghost:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .nav-toggle { display: none; background: none; border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+
+    /* ---------- HERO ---------- */
+    .hero { position: relative; padding: 96px 0 72px; overflow: hidden; }
+    .hero::before {
+      content: ""; position: absolute; inset: 0;
+      background:
+        radial-gradient(60% 45% at 50% -5%, rgba(129,140,248,.20), transparent 70%),
+        radial-gradient(40% 40% at 85% 20%, rgba(56,189,248,.14), transparent 70%),
+        radial-gradient(45% 45% at 10% 30%, rgba(52,211,153,.10), transparent 70%);
+      pointer-events: none;
+    }
+    .hero .wrap { position: relative; text-align: center; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 7px 15px; border-radius: 999px; font-size: 13px; font-weight: 500;
+      background: var(--grad-soft); border: 1px solid var(--border); color: var(--muted);
+      margin-bottom: 26px;
+    }
+    .badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-3); box-shadow: 0 0 0 4px rgba(52,211,153,.18); }
+    .hero h1 { font-size: clamp(2.3rem, 5.4vw, 4rem); line-height: 1.05; letter-spacing: -.035em; font-weight: 800; margin-bottom: 22px; }
+    .hero p.lead { font-size: clamp(1.05rem, 2vw, 1.28rem); color: var(--muted); max-width: 720px; margin: 0 auto 36px; }
+    .hero-cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+    .hero-badges { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 44px; }
+    .hero-badges img { height: 26px; opacity: .95; }
+
+    /* ---------- STATS ---------- */
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 56px; }
+    .stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px 20px; text-align: center; }
+    .stat .num { font-size: 1.9rem; font-weight: 800; letter-spacing: -.02em; }
+    .stat .lbl { font-size: 13.5px; color: var(--dim); margin-top: 4px; }
+
+    /* ---------- SECTIONS ---------- */
+    section.block { padding: 84px 0; }
+    .section-head { max-width: 680px; margin: 0 auto 52px; text-align: center; }
+    .eyebrow { text-transform: uppercase; letter-spacing: .18em; font-size: 12.5px; font-weight: 600; color: var(--accent); margin-bottom: 14px; }
+    .section-head h2 { font-size: clamp(1.7rem, 3.4vw, 2.5rem); letter-spacing: -.03em; font-weight: 800; line-height: 1.12; }
+    .section-head p { color: var(--muted); margin-top: 16px; font-size: 1.06rem; }
+
+    .alt { background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+
+    /* ---------- ABOUT / WHAT ---------- */
+    .about-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 40px; align-items: center; }
+    .about-grid h3 { font-size: 1.5rem; letter-spacing: -.02em; margin-bottom: 16px; }
+    .about-grid p { color: var(--muted); margin-bottom: 16px; }
+    .principle {
+      background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      border-radius: 12px; padding: 18px 20px; margin-top: 8px;
+    }
+    .principle strong { color: var(--text); }
+    .code-card {
+      background: #0b1120; border: 1px solid var(--border); border-radius: var(--radius);
+      overflow: hidden; box-shadow: var(--shadow);
+    }
+    .code-head { display: flex; align-items: center; gap: 7px; padding: 13px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+    .code-head .c { width: 12px; height: 12px; border-radius: 50%; }
+    .code-head .c1 { background: #ff5f56; } .code-head .c2 { background: #ffbd2e; } .code-head .c3 { background: #27c93f; }
+    .code-head .fname { margin-left: 8px; font-size: 12.5px; color: var(--dim); font-family: 'JetBrains Mono', monospace; }
+    .code-body { padding: 18px 20px; font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.9; overflow-x: auto; }
+    .code-body .cmt { color: #5b6b8c; }
+    .code-body .cmd { color: var(--accent-3); }
+    .code-body .arg { color: var(--accent); }
+    .code-body .out { color: var(--muted); }
+
+    /* ---------- FEATURES ---------- */
+    .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .feat {
+      background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 28px 24px; transition: transform .2s ease, border-color .2s ease, background .2s ease;
+    }
+    .feat:hover { transform: translateY(-4px); border-color: var(--accent); background: var(--panel-2); }
+    .feat .ico {
+      width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center;
+      font-size: 22px; margin-bottom: 18px; background: var(--grad-soft); border: 1px solid var(--border);
+    }
+    .feat h4 { font-size: 1.15rem; letter-spacing: -.01em; margin-bottom: 10px; }
+    .feat p { color: var(--muted); font-size: 14.5px; }
+
+    /* ---------- PIPELINE DIAGRAM ---------- */
+    .pipe { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; justify-content: center; }
+    .pipe-stage {
+      flex: 1 1 150px; min-width: 140px; max-width: 200px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+      padding: 20px 16px; text-align: center; position: relative;
+    }
+    .pipe-stage .snum { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent); font-weight: 600; }
+    .pipe-stage .sico { font-size: 26px; margin: 8px 0 6px; }
+    .pipe-stage h5 { font-size: 15px; letter-spacing: -.01em; margin-bottom: 5px; }
+    .pipe-stage p { font-size: 12.5px; color: var(--dim); line-height: 1.5; }
+    .pipe-arrow { display: grid; place-items: center; color: var(--accent-2); font-size: 22px; padding: 0 4px; flex: 0 0 auto; }
+
+    /* Architecture flow */
+    .arch { margin-top: 44px; }
+    .arch-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+    .arch-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+    .node {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px 18px;
+      display: flex; gap: 14px; align-items: flex-start;
+    }
+    .node .nico { font-size: 22px; flex: 0 0 auto; }
+    .node .nbody h5 { font-size: 14.5px; margin-bottom: 3px; }
+    .node .nbody p { font-size: 12.5px; color: var(--dim); line-height: 1.5; }
+    .node.dev { border-left: 3px solid var(--accent-3); }
+    .node.staging { border-left: 3px solid var(--accent-warn); }
+    .node.prod { border-left: 3px solid var(--accent-red); }
+    .flow-label { text-align: center; color: var(--dim); font-size: 12.5px; font-family: 'JetBrains Mono', monospace; margin: 6px 0; }
+    .flow-label span { display: inline-block; padding: 4px 12px; border: 1px dashed var(--border); border-radius: 999px; }
+
+    /* GitOps loop */
+    .loop-note {
+      margin-top: 40px; background: var(--grad-soft); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 28px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 22px;
+    }
+    .loop-note .li { }
+    .loop-note .li strong { display: block; font-size: 14.5px; margin-bottom: 4px; }
+    .loop-note .li span { font-size: 13px; color: var(--muted); }
+    .loop-note .li .k { color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+    /* ---------- TECH STACK ---------- */
+    .tech-cats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .tech-cat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
+    .tech-cat h4 { font-size: 1.05rem; margin-bottom: 16px; display: flex; align-items: center; gap: 9px; }
+    .tech-cat h4 .ti { font-size: 18px; }
+    .tech-list { display: flex; flex-wrap: wrap; gap: 8px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 12px; border-radius: 8px; font-size: 13px; font-weight: 500;
+      background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+      transition: border-color .2s, color .2s;
+    }
+    .chip:hover { border-color: var(--accent); color: var(--text); }
+    .chip .cv { color: var(--dim); font-size: 11.5px; font-family: 'JetBrains Mono', monospace; }
+
+    /* ---------- SECURITY / DORA ---------- */
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .panel-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px; }
+    .panel-card h4 { font-size: 1.15rem; margin-bottom: 18px; display: flex; align-items: center; gap: 10px; }
+    .checklist { list-style: none; display: grid; gap: 12px; }
+    .checklist li { display: flex; gap: 11px; font-size: 14px; color: var(--muted); }
+    .checklist li .ck { color: var(--accent-3); flex: 0 0 auto; font-weight: 700; }
+    .dora { display: grid; gap: 14px; }
+    .dora-item { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+    .dora-item:last-child { border-bottom: none; padding-bottom: 0; }
+    .dora-item .dl { font-size: 14px; }
+    .dora-item .dl span { display: block; font-size: 12px; color: var(--dim); }
+    .dora-item .dv { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--accent-3); font-weight: 600; white-space: nowrap; }
+
+    /* ---------- CTA ---------- */
+    .cta-final { text-align: center; }
+    .cta-box {
+      background: var(--grad-soft); border: 1px solid var(--border); border-radius: 24px;
+      padding: 56px 32px; position: relative; overflow: hidden;
+    }
+    .cta-box::before { content: ""; position: absolute; inset: 0; background: radial-gradient(50% 80% at 50% 0%, rgba(129,140,248,.2), transparent 70%); }
+    .cta-box > * { position: relative; }
+    .cta-box h2 { font-size: clamp(1.6rem, 3vw, 2.3rem); letter-spacing: -.03em; margin-bottom: 14px; }
+    .cta-box p { color: var(--muted); max-width: 520px; margin: 0 auto 28px; }
+
+    /* ---------- FOOTER ---------- */
+    footer { border-top: 1px solid var(--border); background: var(--bg-soft); padding: 56px 0 32px; }
+    .foot-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 40px; margin-bottom: 40px; }
+    .foot-brand .brand { margin-bottom: 14px; }
+    .foot-brand p { color: var(--dim); font-size: 14px; max-width: 320px; }
+    .foot-col h5 { font-size: 13px; text-transform: uppercase; letter-spacing: .12em; color: var(--dim); margin-bottom: 16px; }
+    .foot-col a { display: block; color: var(--muted); font-size: 14.5px; margin-bottom: 11px; transition: color .2s; }
+    .foot-col a:hover { color: var(--accent); }
+    .foot-bottom { display: flex; justify-content: space-between; align-items: center; padding-top: 26px; border-top: 1px solid var(--border); flex-wrap: wrap; gap: 14px; }
+    .foot-bottom p { color: var(--dim); font-size: 13.5px; }
+    .social { display: flex; gap: 12px; }
+    .social a {
+      width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center;
+      background: var(--panel); border: 1px solid var(--border); color: var(--muted); transition: all .2s;
+    }
+    .social a:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
+    .social svg { width: 18px; height: 18px; fill: currentColor; }
+
+    /* ---------- RESPONSIVE ---------- */
+    @media (max-width: 900px) {
+      .about-grid, .split, .foot-grid { grid-template-columns: 1fr; }
+      .feat-grid, .tech-cats { grid-template-columns: repeat(2, 1fr); }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .foot-grid { gap: 32px; }
+    }
+    @media (max-width: 640px) {
+      .nav-links { display: none; }
+      .nav-links.open {
+        display: flex; flex-direction: column; align-items: flex-start; gap: 16px;
+        position: absolute; top: 68px; left: 0; right: 0; padding: 20px 24px;
+        background: var(--bg-soft); border-bottom: 1px solid var(--border);
+      }
+      .nav-toggle { display: block; }
+      .feat-grid, .tech-cats { grid-template-columns: 1fr; }
+      section.block { padding: 60px 0; }
+      .pipe-arrow { transform: rotate(90deg); padding: 6px 0; }
+      .pipe-stage { max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- NAV -->
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a href="#top" class="brand"><span class="logo">⚙️</span> GitOps Pipeline</a>
+      <button class="nav-toggle" aria-label="Toggle menu" onclick="document.getElementById('navlinks').classList.toggle('open')">☰</button>
+      <nav class="nav-links" id="navlinks">
+        <a href="#what">Overview</a>
+        <a href="#features">Features</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#stack">Tech Stack</a>
+        <a href="https://github.com/Parzivalart3mis/gitops-cicd-pipeline" class="btn btn-primary" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.5 2.87 8.32 6.84 9.67.5.09.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.63.07-.62.07-.62 1 .07 1.53 1.05 1.53 1.05.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.55-1.14-4.55-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2z"/></svg>
+          GitHub
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <span id="top"></span>
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <span class="badge"><span class="dot"></span> Production-grade · Runs locally on Kind</span>
+      <h1>End-to-end <span class="grad-text">GitOps CI/CD</span><br />delivery automation</h1>
+      <p class="lead">
+        A production-grade pipeline that ships code from <code>git push</code> to running Kubernetes
+        workloads — automated with GitHub Actions, reconciled by ArgoCD, and observed by a full
+        Prometheus + Grafana stack. All runnable on a single machine.
+      </p>
+      <div class="hero-cta">
+        <a href="https://github.com/Parzivalart3mis/gitops-cicd-pipeline" class="btn btn-primary" target="_blank" rel="noopener">View on GitHub →</a>
+        <a href="#workflow" class="btn btn-ghost">See the architecture</a>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="num grad-text">4</div><div class="lbl">Sequential CI jobs</div></div>
+        <div class="stat"><div class="num grad-text">3</div><div class="lbl">Promoted environments</div></div>
+        <div class="stat"><div class="num grad-text">≥80%</div><div class="lbl">Test coverage enforced</div></div>
+        <div class="stat"><div class="num grad-text">&lt;10m</div><div class="lbl">Lead time to dev</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHAT IT DOES -->
+  <section class="block alt" id="what">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">What it does</div>
+        <h2>Git is the single source of truth</h2>
+        <p>No tool pushes directly to Kubernetes. ArgoCD continuously reconciles the live cluster state with exactly what Git declares — every change is an auditable commit.</p>
+      </div>
+      <div class="about-grid">
+        <div>
+          <h3>Declarative delivery, end to end</h3>
+          <p>
+            Push to <code>main</code> and the pipeline lints, tests, security-scans, builds multi-stage
+            container images, and commits the new image tag back to the repo. ArgoCD detects the commit
+            and rolls the change out to the cluster automatically.
+          </p>
+          <p>
+            The demo application is intentionally trivial — a FastAPI backend and an Nginx frontend —
+            because <strong>the pipeline is the product</strong>, not the app. Every layer models how a
+            real platform team would ship software safely.
+          </p>
+          <div class="principle">
+            <strong>Pull-based over push-based:</strong> CI never holds cluster credentials.
+            ArgoCD runs <em>inside</em> the cluster, watches Git, and reconciles — giving you
+            auditability, one-command rollback, and automatic drift detection.
+          </div>
+        </div>
+        <div class="code-card">
+          <div class="code-head">
+            <span class="c c1"></span><span class="c c2"></span><span class="c c3"></span>
+            <span class="fname">bash — one-command setup</span>
+          </div>
+          <div class="code-body">
+<span class="cmt"># Clone and bootstrap everything</span><br />
+<span class="cmd">git</span> <span class="arg">clone</span> github.com/…/gitops-cicd-pipeline<br />
+<span class="cmd">cd</span> gitops-cicd-pipeline<br /><br />
+<span class="cmt"># Kind cluster + ArgoCD + Prometheus</span><br />
+<span class="cmt"># + Grafana + OPA Gatekeeper</span><br />
+<span class="cmd">make</span> <span class="arg">setup</span><br /><br />
+<span class="out">✔ cluster ready</span><br />
+<span class="out">✔ argocd synced   (gitops-dev)</span><br />
+<span class="out">✔ observability   up</span><br /><br />
+<span class="cmt"># Watch the full pipeline live</span><br />
+<span class="cmd">make</span> <span class="arg">demo</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="block" id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Key features</div>
+        <h2>Everything a real platform needs</h2>
+        <p>Security, promotion gates, rollback, and observability — wired together, not bolted on.</p>
+      </div>
+      <div class="feat-grid">
+        <div class="feat">
+          <div class="ico">🔄</div>
+          <h4>Pull-based GitOps</h4>
+          <p>ArgoCD reconciles the cluster to match Git every 3 minutes, with self-heal and drift detection. Deployments are just commits.</p>
+        </div>
+        <div class="feat">
+          <div class="ico">🧪</div>
+          <h4>Gated CI pipeline</h4>
+          <p>Lint → test → security-scan → build → update-manifests. Ruff, mypy, pytest with ≥80% coverage, and Kustomize validation all block bad merges.</p>
+        </div>
+        <div class="feat">
+          <div class="ico">🚦</div>
+          <h4>Environment promotion</h4>
+          <p>Auto-deploy to dev; manual, approval-gated promotion to staging and prod. Production sync windows block risky weekend deploys.</p>
+        </div>
+        <div class="feat">
+          <div class="ico">↩️</div>
+          <h4>Instant rollback</h4>
+          <p>GitOps rollback workflow updates the overlay, ArgoCD resyncs, and a GitHub Issue is opened as an audit trail — MTTR under 10 minutes.</p>
+        </div>
+        <div class="feat">
+          <div class="ico">🛡️</div>
+          <h4>Security in depth</h4>
+          <p>Trivy CVE scans, non-root read-only containers, Sealed Secrets, and OPA Gatekeeper admission policies enforced at the API server.</p>
+        </div>
+        <div class="feat">
+          <div class="ico">📊</div>
+          <h4>Full observability</h4>
+          <p>Prometheus metrics, pre-built Grafana dashboards, Loki log aggregation, and 7 alert rules covering latency, errors, and rollout health.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WORKFLOW / ARCHITECTURE -->
+  <section class="block alt" id="workflow">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">CI/CD workflow &amp; architecture</div>
+        <h2>From <code>git push</code> to running pods</h2>
+        <p>Four CI jobs run in sequence on every push to <code>main</code>. The final job commits an image-tag bump — and that commit is what triggers ArgoCD.</p>
+      </div>
+
+      <!-- CI pipeline stages -->
+      <div class="pipe">
+        <div class="pipe-stage">
+          <div class="snum">JOB 1</div><div class="sico">🔍</div>
+          <h5>Lint &amp; Test</h5>
+          <p>ruff · mypy · pytest ≥80% · kustomize validate</p>
+        </div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-stage">
+          <div class="snum">JOB 2</div><div class="sico">🔐</div>
+          <h5>Security Scan</h5>
+          <p>Trivy · safety · kubesec → SARIF to GitHub</p>
+        </div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-stage">
+          <div class="snum">JOB 3</div><div class="sico">📦</div>
+          <h5>Build &amp; Push</h5>
+          <p>Multi-stage build → GHCR · image scan blocks CRITICAL</p>
+        </div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-stage">
+          <div class="snum">JOB 4</div><div class="sico">✍️</div>
+          <h5>Update Manifests</h5>
+          <p>kustomize edit set image → commit tag bump</p>
+        </div>
+      </div>
+
+      <div class="flow-label"><span>↓ commit to main triggers ArgoCD reconciliation ↓</span></div>
+
+      <!-- Architecture nodes -->
+      <div class="arch">
+        <div class="arch-grid">
+          <div class="arch-row">
+            <div class="node">
+              <div class="nico">👩‍💻</div>
+              <div class="nbody"><h5>Developer</h5><p>Pushes code to the GitHub repository</p></div>
+            </div>
+            <div class="node">
+              <div class="nico">⚙️</div>
+              <div class="nbody"><h5>GitHub Actions</h5><p>CI builds, scans &amp; commits image tags</p></div>
+            </div>
+            <div class="node">
+              <div class="nico">🐳</div>
+              <div class="nbody"><h5>GHCR</h5><p>Immutable container images by SHA</p></div>
+            </div>
+            <div class="node">
+              <div class="nico">🎯</div>
+              <div class="nbody"><h5>ArgoCD</h5><p>Polls Git · reconciles cluster state</p></div>
+            </div>
+          </div>
+          <div class="flow-label"><span>ArgoCD applies desired state to each environment →</span></div>
+          <div class="arch-row">
+            <div class="node dev">
+              <div class="nico">🟢</div>
+              <div class="nbody"><h5>gitops-dev</h5><p>1 replica · debug logs · <strong>auto-sync</strong></p></div>
+            </div>
+            <div class="node staging">
+              <div class="nico">🟡</div>
+              <div class="nbody"><h5>gitops-staging</h5><p>2 replicas · info logs · manual sync</p></div>
+            </div>
+            <div class="node prod">
+              <div class="nico">🔴</div>
+              <div class="nbody"><h5>gitops-prod</h5><p>3 replicas · PDB minAvailable 2 · approval-gated</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- GitOps loop explainer -->
+      <div class="loop-note">
+        <div class="li"><strong>1 · Desired state</strong><span>Git holds every manifest. <span class="k">source of truth</span></span></div>
+        <div class="li"><strong>2 · Reconcile</strong><span>ArgoCD diffs desired vs actual every <span class="k">3 min</span></span></div>
+        <div class="li"><strong>3 · Apply</strong><span>Out of sync? <span class="k">kubectl apply</span> to converge</span></div>
+        <div class="li"><strong>4 · Observe</strong><span>Prometheus scrapes; Grafana &amp; alerts report health</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TECH STACK -->
+  <section class="block" id="stack">
+    <div class="wrap">
+      <div class="section-head">
+        <div class="eyebrow">Tech stack</div>
+        <h2>Built with industry-standard tooling</h2>
+        <p>Chosen deliberately — each tool earns its place with a documented design rationale.</p>
+      </div>
+      <div class="tech-cats">
+        <div class="tech-cat">
+          <h4><span class="ti">🚀</span> CI / CD &amp; GitOps</h4>
+          <div class="tech-list">
+            <span class="chip">GitHub Actions</span>
+            <span class="chip">ArgoCD <span class="cv">v2.11</span></span>
+            <span class="chip">Kustomize <span class="cv">v5.4</span></span>
+            <span class="chip">Helm <span class="cv">v3.15</span></span>
+          </div>
+        </div>
+        <div class="tech-cat">
+          <h4><span class="ti">☸️</span> Orchestration</h4>
+          <div class="tech-list">
+            <span class="chip">Kubernetes <span class="cv">v1.30</span></span>
+            <span class="chip">Kind <span class="cv">v0.23</span></span>
+            <span class="chip">Docker <span class="cv">≥24</span></span>
+          </div>
+        </div>
+        <div class="tech-cat">
+          <h4><span class="ti">🧩</span> Application</h4>
+          <div class="tech-list">
+            <span class="chip">FastAPI <span class="cv">0.111</span></span>
+            <span class="chip">Python <span class="cv">3.12</span></span>
+            <span class="chip">Nginx <span class="cv">1.27</span></span>
+          </div>
+        </div>
+        <div class="tech-cat">
+          <h4><span class="ti">📈</span> Observability</h4>
+          <div class="tech-list">
+            <span class="chip">Prometheus <span class="cv">v2.53</span></span>
+            <span class="chip">Grafana <span class="cv">v11</span></span>
+            <span class="chip">Loki</span>
+            <span class="chip">structlog</span>
+          </div>
+        </div>
+        <div class="tech-cat">
+          <h4><span class="ti">🔒</span> Security</h4>
+          <div class="tech-list">
+            <span class="chip">Trivy</span>
+            <span class="chip">OPA Gatekeeper <span class="cv">v3.16</span></span>
+            <span class="chip">Sealed Secrets <span class="cv">v0.27</span></span>
+            <span class="chip">kubesec</span>
+            <span class="chip">safety</span>
+          </div>
+        </div>
+        <div class="tech-cat">
+          <h4><span class="ti">🧰</span> Quality</h4>
+          <div class="tech-list">
+            <span class="chip">pytest</span>
+            <span class="chip">ruff</span>
+            <span class="chip">mypy</span>
+            <span class="chip">shellcheck</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECURITY + DORA -->
+  <section class="block alt">
+    <div class="wrap">
+      <div class="split">
+        <div class="panel-card">
+          <h4>🛡️ Security by default</h4>
+          <ul class="checklist">
+            <li><span class="ck">✓</span> Non-root, read-only root filesystem containers with all capabilities dropped</li>
+            <li><span class="ck">✓</span> Trivy scans for CVEs &amp; secrets — CRITICAL findings fail the build</li>
+            <li><span class="ck">✓</span> Sealed Secrets: encrypt-once, commit-safely — no plaintext in Git</li>
+            <li><span class="ck">✓</span> OPA Gatekeeper: required labels, resource limits, no <code>:latest</code> in prod</li>
+            <li><span class="ck">✓</span> SARIF results published to the GitHub Security tab</li>
+          </ul>
+        </div>
+        <div class="panel-card">
+          <h4>📐 Optimised for DORA metrics</h4>
+          <div class="dora">
+            <div class="dora-item">
+              <div class="dl">Deployment Frequency<span>Every push auto-deploys to dev</span></div>
+              <div class="dv">Multiple / day</div>
+            </div>
+            <div class="dora-item">
+              <div class="dl">Lead Time for Changes<span>CI ~5 min + ArgoCD ~3 min sync</span></div>
+              <div class="dv">&lt; 10 min</div>
+            </div>
+            <div class="dora-item">
+              <div class="dl">Change Failure Rate<span>Tests, scans &amp; OPA policies gate deploys</span></div>
+              <div class="dv">&lt; 5%</div>
+            </div>
+            <div class="dora-item">
+              <div class="dl">Mean Time to Recovery<span>GitOps rollback + auto resync</span></div>
+              <div class="dv">&lt; 10 min</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section class="block cta-final">
+    <div class="wrap">
+      <div class="cta-box">
+        <h2>Explore the full pipeline</h2>
+        <p>Every workflow, manifest, policy, and dashboard is open source and documented — including architecture diagrams, rollback procedures, and design-decision write-ups.</p>
+        <div class="hero-cta">
+          <a href="https://github.com/Parzivalart3mis/gitops-cicd-pipeline" class="btn btn-primary" target="_blank" rel="noopener">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.5 2.87 8.32 6.84 9.67.5.09.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.63.07-.62.07-.62 1 .07 1.53 1.05 1.53 1.05.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.55-1.14-4.55-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2z"/></svg>
+            Star on GitHub
+          </a>
+          <a href="https://github.com/Parzivalart3mis/gitops-cicd-pipeline/blob/master/README.md" class="btn btn-ghost" target="_blank" rel="noopener">Read the docs</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="wrap">
+      <div class="foot-grid">
+        <div class="foot-brand">
+          <div class="brand"><span class="logo">⚙️</span> GitOps CI/CD Pipeline</div>
+          <p>A production-grade GitOps delivery pipeline built as a portfolio project to demonstrate modern DevOps and platform engineering practices end to end.</p>
+        </div>
+        <div class="foot-col">
+          <h5>Project</h5>
+          <a href="https://github.com/Parzivalart3mis/gitops-cicd-pipeline" target="_blank" rel="noopener">GitHub Repository</a>
+          <a href="https://github.com/Parzivalart3mis/gitops-cicd-pipeline/blob/master/README.md" target="_blank" rel="noopener">Documentation</a>
+          <a href="https://github.com/Parzivalart3mis/gitops-cicd-pipeline/tree/master/docs" target="_blank" rel="noopener">Architecture &amp; Docs</a>
+          <a href="https://github.com/Parzivalart3mis/gitops-cicd-pipeline/actions" target="_blank" rel="noopener">CI Pipeline Runs</a>
+        </div>
+        <div class="foot-col">
+          <h5>Connect</h5>
+          <a href="https://github.com/Parzivalart3mis" target="_blank" rel="noopener">GitHub Profile</a>
+          <a href="mailto:ysharma6@hawk.illinoistech.edu">Email</a>
+          <a href="https://www.linkedin.com/" target="_blank" rel="noopener">LinkedIn</a>
+        </div>
+      </div>
+      <div class="foot-bottom">
+        <p>© <span id="year"></span> Yash Sharma · MIT Licensed · Built with GitHub Actions, ArgoCD &amp; Kubernetes</p>
+        <div class="social">
+          <a href="https://github.com/Parzivalart3mis" target="_blank" rel="noopener" aria-label="GitHub">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.5 2.87 8.32 6.84 9.67.5.09.68-.22.68-.49 0-.24-.01-.87-.01-1.71-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.63.07-.62.07-.62 1 .07 1.53 1.05 1.53 1.05.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.55-1.14-4.55-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.49A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2z"/></svg>
+          </a>
+          <a href="mailto:ysharma6@hawk.illinoistech.edu" aria-label="Email">
+            <svg viewBox="0 0 24 24"><path d="M20 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 4-8 5-8-5V6l8 5 8-5v2z"/></svg>
+          </a>
+          <a href="https://www.linkedin.com/" target="_blank" rel="noopener" aria-label="LinkedIn">
+            <svg viewBox="0 0 24 24"><path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14zM8.34 18.34V9.9H5.67v8.44h2.67zM7 8.72a1.55 1.55 0 1 0 0-3.1 1.55 1.55 0 0 0 0 3.1zm11.34 9.62v-4.63c0-2.47-1.32-3.62-3.08-3.62a2.66 2.66 0 0 0-2.41 1.32v-1.13H10.2v8.06h2.65v-4.46c0-1.18.22-2.32 1.68-2.32 1.44 0 1.46 1.35 1.46 2.4v4.38h2.35z"/></svg>
+          </a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+    // Close mobile menu on link click
+    document.querySelectorAll('#navlinks a').forEach(function (a) {
+      a.addEventListener('click', function () {
+        document.getElementById('navlinks').classList.remove('open');
+      });
+    });
+  </script>
+</body>
+</html>

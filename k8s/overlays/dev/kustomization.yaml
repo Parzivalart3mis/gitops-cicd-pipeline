@@ -33,10 +33,10 @@ images:
   newTag: latest
 - name: ghcr.io/parzivalart3mis/gitops-backend
   newName: ghcr.io/parzivalart3mis/gitops-backend
-  newTag: 8a139d1
+  newTag: 001c16a
 - name: ghcr.io/parzivalart3mis/gitops-frontend
   newName: ghcr.io/parzivalart3mis/gitops-frontend
-  newTag: 8a139d1
+  newTag: 001c16a
 
 # Add environment label to all resources in this overlay
 commonLabels:

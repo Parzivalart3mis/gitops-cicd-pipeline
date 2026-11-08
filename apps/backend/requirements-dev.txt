@@ -1,0 +1,15 @@
+# Development, test and CI tooling. Installed by CI, `make test`/`make lint`,
+# and the test stage of Dockerfile.multistage. Never installed in the
+# production image.
+#
+# Tool versions are pinned so a new upstream release cannot change lint
+# results or break CI without a code change in this repo.
+-r requirements.txt
+
+pytest==9.2.0
+pytest-cov==7.1.0
+httpx2==2.16.0         # HTTP client used by FastAPI/Starlette's TestClient
+
+ruff==0.17.4
+mypy==2.4.1
+pip-audit==2.10.1

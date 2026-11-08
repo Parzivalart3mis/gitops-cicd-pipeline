@@ -3,7 +3,7 @@ title: Environment Promotion Flow
 ---
 flowchart LR
     subgraph Build ["Build Phase"]
-        Code[Code Change\ngit push main]
+        Code[Code Change\ngit push master]
         CI[CI Pipeline\nTests + Scan + Build]
         Image[Docker Image\nghcr.io/app:a1b2c3d]
     end

@@ -1,4 +1,5 @@
 # frontend/hpa.yaml — HorizontalPodAutoscaler for the frontend.
+# Dev-sized defaults; staging and prod override them in patches/hpa.yaml.
 
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -13,8 +14,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: frontend
-  minReplicas: 1
-  maxReplicas: 8
+  minReplicas: 1  # overridden in staging/prod overlays
+  maxReplicas: 3
   metrics:
     - type: Resource
       resource:

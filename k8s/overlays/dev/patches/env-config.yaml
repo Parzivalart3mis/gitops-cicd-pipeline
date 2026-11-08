@@ -1,4 +1,8 @@
 # patches/env-config.yaml — Environment-specific ConfigMap values for dev.
+#
+# git_sha and frontend_version are rewritten by scripts/set-image-tag.sh in
+# the same commit that changes the image tags, so /healthz and the UI always
+# report the commit that is actually deployed. Don't edit them by hand.
 
 apiVersion: v1
 kind: ConfigMap
@@ -7,6 +11,7 @@ metadata:
 data:
   environment: "dev"
   log_level: "debug"  # verbose logging is helpful in dev
+  git_sha: "001c16a"
 
 ---
 apiVersion: v1
@@ -14,4 +19,4 @@ kind: ConfigMap
 metadata:
   name: frontend-config
 data:
-  backend_url: "http://backend.gitops-dev.svc.cluster.local:8000"
+  frontend_version: "001c16a"

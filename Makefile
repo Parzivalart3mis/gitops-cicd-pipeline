@@ -4,7 +4,7 @@
 # Run `make help` to see available commands.
 #
 # Prerequisites: docker, kubectl, kind, kustomize, helm
-# Run `make setup` to install all dependencies on a fresh machine.
+# Run `make setup` to create the local cluster and install everything.
 
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
@@ -14,11 +14,16 @@ CLUSTER_NAME    ?= gitops-demo
 NAMESPACE_DEV   ?= gitops-dev
 NAMESPACE_STG   ?= gitops-staging
 NAMESPACE_PROD  ?= gitops-prod
-OWNER           ?= Parzivalart3mis
+# Must be lowercase: OCI repository paths are lowercase-only, and the names
+# must match the images in k8s/base exactly.
+OWNER           ?= parzivalart3mis
 REGISTRY        ?= ghcr.io/$(OWNER)
+export REGISTRY
 
 # Compute the short git SHA for tagging (falls back to 'local' if not in a git repo)
 GIT_SHA         := $(shell git rev-parse --short HEAD 2>/dev/null || echo local)
+
+HOSTS_LINE := 127.0.0.1 dev.gitops.local api.dev.gitops.local staging.gitops.local api.staging.gitops.local prod.gitops.local api.prod.gitops.local
 
 # Colour codes for prettier output
 BOLD   := \033[1m
@@ -43,20 +48,29 @@ help: ## Show this help message
 # ---------------------------------------------------------------------------
 .PHONY: setup
 setup: ## Create local Kind cluster and install all dependencies
-	@echo -e "\n$(BOLD)$(CYAN)Setting up local GitOps cluster...$(NC)"
-	@chmod +x scripts/setup-cluster.sh
 	@bash scripts/setup-cluster.sh
 
 .PHONY: teardown
 teardown: ## Delete the Kind cluster and clean up all resources
-	@chmod +x scripts/teardown-cluster.sh
 	@bash scripts/teardown-cluster.sh
 
 .PHONY: port-forward
-port-forward: ## Port-forward ArgoCD, Grafana, and app UIs to localhost
-	@echo -e "$(CYAN)Starting port-forwards...$(NC)"
-	@chmod +x scripts/port-forward.sh
+port-forward: ## Port-forward Argo CD, Grafana, and app UIs to localhost
 	@bash scripts/port-forward.sh
+
+.PHONY: hosts
+hosts: ## Print the /etc/hosts line for the Ingress hostnames
+	@echo "Add this line to /etc/hosts (e.g. with: echo '<line>' | sudo tee -a /etc/hosts):"
+	@echo ""
+	@echo "$(HOSTS_LINE)"
+
+.PHONY: install-argocd
+install-argocd: ## Install Argo CD into the current cluster
+	@bash scripts/install-argocd.sh
+
+.PHONY: install-observability
+install-observability: ## Install Prometheus, Grafana, Loki and Alloy into the current cluster
+	@bash scripts/install-observability.sh
 
 # ---------------------------------------------------------------------------
 # Build
@@ -65,163 +79,113 @@ port-forward: ## Port-forward ArgoCD, Grafana, and app UIs to localhost
 build: build-backend build-frontend ## Build Docker images for both apps
 
 .PHONY: build-backend
-build-backend: ## Build the backend Docker image (multi-stage)
-	@echo -e "$(CYAN)Building backend image: $(REGISTRY)/gitops-backend:$(GIT_SHA)$(NC)"
+build-backend: ## Build the backend Docker image (multi-stage; runs the tests)
 	docker build \
 		-f apps/backend/Dockerfile.multistage \
 		--build-arg GIT_SHA=$(GIT_SHA) \
 		-t $(REGISTRY)/gitops-backend:$(GIT_SHA) \
-		-t $(REGISTRY)/gitops-backend:latest \
 		apps/backend
-	@echo -e "$(GREEN)Backend image built: $(REGISTRY)/gitops-backend:$(GIT_SHA)$(NC)"
 
 .PHONY: build-frontend
 build-frontend: ## Build the frontend Docker image (multi-stage)
-	@echo -e "$(CYAN)Building frontend image: $(REGISTRY)/gitops-frontend:$(GIT_SHA)$(NC)"
 	docker build \
 		-f apps/frontend/Dockerfile.multistage \
 		--build-arg FRONTEND_VERSION=$(GIT_SHA) \
 		-t $(REGISTRY)/gitops-frontend:$(GIT_SHA) \
-		-t $(REGISTRY)/gitops-frontend:latest \
 		apps/frontend
-	@echo -e "$(GREEN)Frontend image built: $(REGISTRY)/gitops-frontend:$(GIT_SHA)$(NC)"
 
 .PHONY: load-images
-load-images: build ## Build and load images into Kind cluster (no registry push)
-	@echo -e "$(CYAN)Loading images into Kind cluster '$(CLUSTER_NAME)'...$(NC)"
+load-images: build ## Build and load images into Kind (no registry push)
 	kind load docker-image $(REGISTRY)/gitops-backend:$(GIT_SHA)  --name $(CLUSTER_NAME)
 	kind load docker-image $(REGISTRY)/gitops-frontend:$(GIT_SHA) --name $(CLUSTER_NAME)
-	@echo -e "$(GREEN)Images loaded$(NC)"
 
 .PHONY: clean-images
 clean-images: ## Remove local gitops-* Docker images
 	@docker images --format "{{.Repository}}:{{.Tag}}" | \
 		grep "gitops-" | xargs -r docker rmi || true
-	@echo -e "$(GREEN)Local images cleaned$(NC)"
 
 # ---------------------------------------------------------------------------
-# Test & Lint
+# Quality gates (the same checks CI runs)
 # ---------------------------------------------------------------------------
 .PHONY: test
-test: ## Run all unit tests with coverage report
-	@echo -e "$(CYAN)Running backend tests...$(NC)"
+test: ## Run backend unit tests with the 80% coverage gate
 	cd apps/backend && \
-		pip install -q -r requirements.txt && \
+		pip install -q -r requirements-dev.txt && \
 		pytest src/tests/ -v --tb=short \
 			--cov=src \
 			--cov-report=term-missing \
 			--cov-fail-under=80
 
 .PHONY: lint
-lint: ## Run linters on all code and manifests
-	@echo -e "$(CYAN)Linting Python (ruff + mypy)...$(NC)"
-	cd apps/backend && pip install -q ruff mypy && \
-		ruff check src/ && \
-		mypy src/ --ignore-missing-imports
-	@echo -e "$(CYAN)Linting shell scripts (shellcheck)...$(NC)"
-	shellcheck scripts/*.sh || true
-	@echo -e "$(CYAN)Validating Nginx config...$(NC)"
-	docker run --rm \
-		-v "$(PWD)/apps/frontend/nginx.conf:/etc/nginx/nginx.conf:ro" \
-		nginx:1.27.0-alpine nginx -t -c /etc/nginx/nginx.conf 2>&1 || true
-	@echo -e "$(GREEN)Linting complete$(NC)"
-
-.PHONY: scan
-scan: ## Run security scans (Trivy image scan + kubesec manifest scan)
-	@echo -e "$(CYAN)Running Trivy filesystem scan...$(NC)"
-	trivy fs . --severity HIGH,CRITICAL --ignore-unfixed || true
-	@echo -e "\n$(CYAN)Running kubesec scan on backend deployment...$(NC)"
-	kubesec scan k8s/base/backend/deployment.yaml 2>/dev/null || \
-		echo "(kubesec not installed — skip)"
-	@echo -e "\n$(CYAN)Running kubesec scan on frontend deployment...$(NC)"
-	kubesec scan k8s/base/frontend/deployment.yaml 2>/dev/null || \
-		echo "(kubesec not installed — skip)"
-	@echo -e "$(GREEN)Security scan complete$(NC)"
+lint: ## Lint Python (ruff, mypy), shell scripts (shellcheck) and the Nginx config
+	cd apps/backend && pip install -q -r requirements-dev.txt && ruff check src/ && mypy src/
+	shellcheck --severity=warning -x scripts/*.sh scripts/ci/*.sh apps/frontend/entrypoint.sh
+	docker build -q -f apps/frontend/Dockerfile.multistage -t gitops-frontend:lint apps/frontend >/dev/null
+	docker run --rm -e BACKEND_UPSTREAM=http://127.0.0.1:8000 gitops-frontend:lint nginx -t
 
 .PHONY: validate-manifests
-validate-manifests: ## Run kustomize build on all overlays to verify they render
-	@echo -e "$(CYAN)Validating Kustomize overlays...$(NC)"
-	@for env in dev staging prod; do \
-		echo -e "  Validating $$env..."; \
-		kustomize build k8s/overlays/$$env > /dev/null && \
-		echo -e "  $(GREEN)✅ $$env overlay is valid$(NC)"; \
-	done
+validate-manifests: ## Render all overlays and check image names, tags, hosts
+	@bash scripts/ci/validate-manifests.sh
+
+.PHONY: scan
+scan: ## Security scans: Trivy (fs), pip-audit, kubesec — each skipped if not installed
+	@if command -v trivy >/dev/null; then \
+		trivy fs --config security/trivy/trivy-config.yaml . ; \
+	else echo "(trivy not installed — skipped)"; fi
+	@if command -v pip-audit >/dev/null; then \
+		pip-audit --strict -r apps/backend/requirements-dev.txt ; \
+	else echo "(pip-audit not installed — skipped; pip install -r apps/backend/requirements-dev.txt)"; fi
+	@if command -v kubesec >/dev/null; then \
+		for app in backend frontend; do kubesec scan k8s/base/$$app/deployment.yaml; done ; \
+	else echo "(kubesec not installed — skipped)"; fi
 
 # ---------------------------------------------------------------------------
-# Deploy
+# Deploy / promote / rollback (local equivalents of the GitHub workflows)
 # ---------------------------------------------------------------------------
 .PHONY: deploy-dev
-deploy-dev: ## Deploy to dev environment (update kustomize and apply)
-	@echo -e "$(CYAN)Deploying to dev (tag: $(GIT_SHA))...$(NC)"
-	cd k8s/overlays/dev && \
-		kustomize edit set image \
-			$(REGISTRY)/gitops-backend=$(REGISTRY)/gitops-backend:$(GIT_SHA) && \
-		kustomize edit set image \
-			$(REGISTRY)/gitops-frontend=$(REGISTRY)/gitops-frontend:$(GIT_SHA)
+deploy-dev: load-images ## Build, load into Kind, point dev at the current commit, and apply directly
+	bash scripts/set-image-tag.sh k8s/overlays/dev $(GIT_SHA)
 	kustomize build k8s/overlays/dev | kubectl apply -f -
-	kubectl rollout status deployment/backend  -n $(NAMESPACE_DEV) --timeout=120s
-	kubectl rollout status deployment/frontend -n $(NAMESPACE_DEV) --timeout=120s
-	@echo -e "$(GREEN)Deployed to dev: $(GIT_SHA)$(NC)"
+	kubectl rollout status deployment/backend  -n $(NAMESPACE_DEV) --timeout=180s
+	kubectl rollout status deployment/frontend -n $(NAMESPACE_DEV) --timeout=180s
+	@echo -e "$(YELLOW)Note: Argo CD self-heals dev back to Git within minutes."
+	@echo -e "Commit and push k8s/overlays/dev/ to keep this version (or use 'make demo').$(NC)"
 
 .PHONY: promote
-promote: ## Promote between environments (interactive)
-	@echo ""
-	@echo -e "$(BOLD)Environment Promotion$(NC)"
-	@read -p "Source environment (dev/staging): " SRC; \
-	read -p "Target environment (staging/prod): " TGT; \
-	read -p "Image tag to promote (git SHA): " TAG; \
-	echo ""; \
+promote: ## Promote the tag running in one environment to the next (interactive)
+	@read -r -p "Source environment (dev/staging): " SRC; \
+	case "$$SRC" in dev) TGT=staging ;; staging) TGT=prod ;; \
+		*) echo "Source must be dev or staging"; exit 1 ;; esac; \
+	TAG=$$(bash scripts/get-image-tag.sh k8s/overlays/$$SRC backend); \
+	if [[ "$$TAG" == latest ]]; then echo "$$SRC has no SHA tag deployed yet"; exit 1; fi; \
 	echo "Promoting $$SRC → $$TGT [$$TAG]"; \
-	cd k8s/overlays/$$TGT && \
-		kustomize edit set image \
-			$(REGISTRY)/gitops-backend=$(REGISTRY)/gitops-backend:$$TAG && \
-		kustomize edit set image \
-			$(REGISTRY)/gitops-frontend=$(REGISTRY)/gitops-frontend:$$TAG; \
+	bash scripts/set-image-tag.sh k8s/overlays/$$TGT "$$TAG"; \
 	git add k8s/overlays/$$TGT/; \
 	git commit -m "chore(promote): $$SRC → $$TGT [$$TAG]"; \
-	echo -e "$(GREEN)Committed. Push to trigger ArgoCD sync: git push$(NC)"
+	echo -e "$(GREEN)Committed. Push to master, then sync: argocd app sync gitops-demo-$$TGT$(NC)"
 
 .PHONY: rollback
-rollback: ## Rollback an environment to a previous tag (interactive)
-	@echo ""
-	@echo -e "$(BOLD)$(YELLOW)Emergency Rollback$(NC)"
-	@read -p "Environment to rollback (dev/staging/prod): " ENV; \
-	read -p "Target image tag (git SHA): " TAG; \
-	read -p "Reason for rollback: " REASON; \
-	echo ""; \
+rollback: ## Roll an environment back to a previous tag (interactive)
+	@read -r -p "Environment to roll back (dev/staging/prod): " ENV; \
+	case "$$ENV" in dev|staging|prod) ;; *) echo "Unknown environment"; exit 1 ;; esac; \
+	read -r -p "Target image tag (git short SHA): " TAG; \
+	[[ "$$TAG" =~ ^[0-9a-f]{7,40}$$ ]] || { echo "Tag must be a git SHA"; exit 1; }; \
+	read -r -p "Reason for rollback: " REASON; \
 	echo -e "$(YELLOW)Rolling back $$ENV to $$TAG...$(NC)"; \
-	cd k8s/overlays/$$ENV && \
-		kustomize edit set image \
-			$(REGISTRY)/gitops-backend=$(REGISTRY)/gitops-backend:$$TAG && \
-		kustomize edit set image \
-			$(REGISTRY)/gitops-frontend=$(REGISTRY)/gitops-frontend:$$TAG; \
+	bash scripts/set-image-tag.sh k8s/overlays/$$ENV "$$TAG"; \
 	git add k8s/overlays/$$ENV/; \
-	git commit -m "chore(rollback): $$ENV → $$TAG reason: $$REASON"; \
-	echo -e "$(GREEN)Rollback committed. Push to apply: git push$(NC)"
+	git commit -m "chore(rollback): $$ENV → $$TAG" -m "Reason: $$REASON"; \
+	echo -e "$(GREEN)Rollback committed. Push to master to apply.$(NC)"
 
 # ---------------------------------------------------------------------------
-# ArgoCD
+# Observability helpers
 # ---------------------------------------------------------------------------
-.PHONY: install-argocd
-install-argocd: ## Install ArgoCD into the current cluster
-	@chmod +x scripts/install-argocd.sh
-	@bash scripts/install-argocd.sh
-
-.PHONY: install-observability
-install-observability: ## Install Prometheus + Grafana into the current cluster
-	@chmod +x scripts/install-observability.sh
-	@bash scripts/install-observability.sh
-
 .PHONY: status
-status: ## Show ArgoCD sync status for all environments
-	@echo -e "$(BOLD)ArgoCD Application Status$(NC)"
+status: ## Show Argo CD sync status for all environments
 	@kubectl get applications -n argocd \
 		-o custom-columns='NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,REVISION:.status.sync.revision' \
-		2>/dev/null || echo "(ArgoCD not installed)"
+		2>/dev/null || echo "(Argo CD not installed)"
 
-# ---------------------------------------------------------------------------
-# Observability & Debugging
-# ---------------------------------------------------------------------------
 .PHONY: logs
 logs: ## Tail logs from backend pods in dev (set NS=gitops-staging for other envs)
 	@NS=$${NS:-$(NAMESPACE_DEV)}; \
@@ -241,18 +205,16 @@ pods: ## Show pod status across all gitops namespaces
 	done
 
 # ---------------------------------------------------------------------------
-# Secrets
+# Secrets & demo
 # ---------------------------------------------------------------------------
 .PHONY: seal-secret
-seal-secret: ## Seal a secret for an environment (interactive)
-	@chmod +x scripts/seal-secret.sh
-	@echo "Usage: ./scripts/seal-secret.sh <namespace> <secret-name> <key>=<value>"
-	@bash scripts/seal-secret.sh
+seal-secret: ## Seal a secret: make seal-secret ENV=dev NAME=app-secrets DATA="api-key=@./key.txt"
+	@if [[ -z "$(ENV)" || -z "$(NAME)" || -z "$(DATA)" ]]; then \
+		echo 'Usage: make seal-secret ENV=<dev|staging|prod> NAME=<secret-name> DATA="key=value [key2=@file ...]"'; \
+		exit 1; \
+	fi
+	@bash scripts/seal-secret.sh "$(ENV)" "$(NAME)" $(DATA)
 
-# ---------------------------------------------------------------------------
-# Demo
-# ---------------------------------------------------------------------------
 .PHONY: demo
-demo: ## Run the full automated demo (deploy → change → watch sync → verify)
-	@chmod +x scripts/demo.sh
+demo: ## Run the interactive end-to-end demo (build → deploy → verify → self-heal)
 	@bash scripts/demo.sh

@@ -1,11 +1,11 @@
 # overlays/dev/kustomization.yaml — Development environment overlay.
 #
 # Dev is the first environment in the promotion chain. The CI pipeline
-# automatically updates the image tags here on every push to main.
-# ArgoCD is configured to auto-sync dev, so every merge to main
-# triggers a deployment to dev within ~60 seconds.
+# automatically updates the image tags here on every push to master.
+# ArgoCD is configured to auto-sync dev, so every merge to master
+# deploys to dev within a few minutes (ArgoCD polls Git every ~3 min).
 #
-# Dev profile: single replica, low resource limits, debug logging.
+# Dev profile: single replica (HPA 1–3), low resource limits, debug logging.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -15,29 +15,46 @@ namespace: gitops-dev
 resources:
 - ../../base
 
-# Patches are applied in order. Each patch file uses a strategic merge
-# so only specified fields are overridden — everything else inherits from base.
+# Strategic-merge patches: only the fields they specify are overridden;
+# everything else is inherited from base. The two inline JSON patches set the
+# per-environment Ingress hosts (base hosts are placeholders).
+# (Keep comments out of the lists below: `kustomize edit`, which CI runs on
+# this file, drops or moves them.)
 patches:
 - path: patches/replica-count.yaml
 - path: patches/resource-limits.yaml
 - path: patches/env-config.yaml
+- patch: |-
+    - op: replace
+      path: /spec/rules/0/host
+      value: dev.gitops.local
+  target:
+    kind: Ingress
+    name: frontend
+- patch: |-
+    - op: replace
+      path: /spec/rules/0/host
+      value: api.dev.gitops.local
+  target:
+    kind: Ingress
+    name: backend
 
-# images[] is the mechanism the CI pipeline uses to update image tags.
-# The CI job runs: kustomize edit set image ghcr.io/Parzivalart3mis/gitops-backend=ghcr.io/Parzivalart3mis/gitops-backend:<SHA>
-# That command updates the newTag field below in-place, then commits the change.
-# ArgoCD detects the git commit and syncs.
+# images[] is how deployments happen. scripts/set-image-tag.sh (run by CI's
+# update-manifests job) executes, for each app:
+#   kustomize edit set image ghcr.io/parzivalart3mis/gitops-backend=ghcr.io/parzivalart3mis/gitops-backend:<SHA>
+# which rewrites newTag below in place, and bumps git_sha/frontend_version in
+# patches/env-config.yaml to match. ArgoCD detects the commit and syncs.
+# `name` must equal the image in k8s/base exactly (lowercase), or the entry
+# matches nothing and the base placeholder tag ships instead.
 images:
-- name: ghcr.io/Parzivalart3mis/gitops-backend
-  newTag: latest
-- name: ghcr.io/Parzivalart3mis/gitops-frontend
-  newTag: latest
 - name: ghcr.io/parzivalart3mis/gitops-backend
-  newName: ghcr.io/parzivalart3mis/gitops-backend
   newTag: 001c16a
 - name: ghcr.io/parzivalart3mis/gitops-frontend
-  newName: ghcr.io/parzivalart3mis/gitops-frontend
   newTag: 001c16a
 
-# Add environment label to all resources in this overlay
-commonLabels:
-  environment: dev
+# Add the environment label to all resources and pod templates (not to
+# selectors, which are immutable; see k8s/base/kustomization.yaml).
+labels:
+- includeTemplates: true
+  pairs:
+    environment: dev

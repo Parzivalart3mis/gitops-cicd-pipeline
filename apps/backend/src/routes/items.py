@@ -8,7 +8,6 @@ is to demo the CI/CD pipeline, not persistence semantics.
 """
 
 from uuid import UUID
-from typing import Dict
 
 import structlog
 from fastapi import APIRouter, HTTPException, status
@@ -20,7 +19,7 @@ log = structlog.get_logger()
 router = APIRouter()
 
 # In-memory store: { UUID → Item }
-_store: Dict[UUID, Item] = {}
+_store: dict[UUID, Item] = {}
 
 
 @router.get("/items", response_model=list[Item], summary="List all items")

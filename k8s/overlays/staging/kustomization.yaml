@@ -2,12 +2,16 @@
 #
 # Staging mirrors production configuration as closely as possible.
 # It is the gate before production: images must pass all tests AND be
-# manually approved before they are promoted here.
+# promoted deliberately (promote.yml, dev → staging) before they land here.
 #
-# ArgoCD does NOT auto-sync staging — a human (or the promote.yml workflow)
-# must trigger sync. This prevents untested code from reaching a shared env.
+# ArgoCD does NOT auto-sync staging — after a promotion commit a human syncs
+# it (`argocd app sync gitops-demo-staging` or the UI).
 #
-# Staging profile: 2 replicas, production-like resources, info logging.
+# Until the first promotion, the tags below are the placeholder `latest`,
+# which OPA Gatekeeper's block-latest-tag policy rejects in staging/prod by
+# design: promote a real SHA first.
+#
+# Staging profile: 2 replicas (HPA 2–4), production-like resources, info logging.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -15,18 +19,39 @@ kind: Kustomization
 namespace: gitops-staging
 
 resources:
-  - ../../base
+- ../../base
 
+# The inline JSON patches set the per-environment Ingress hosts. (Keep
+# comments out of the lists below: `kustomize edit`, which the
+# promote/rollback workflows run, drops them.)
 patches:
-  - path: patches/replica-count.yaml
-  - path: patches/resource-limits.yaml
-  - path: patches/env-config.yaml
+- path: patches/replica-count.yaml
+- path: patches/resource-limits.yaml
+- path: patches/env-config.yaml
+- path: patches/hpa.yaml
+- patch: |-
+    - op: replace
+      path: /spec/rules/0/host
+      value: staging.gitops.local
+  target:
+    kind: Ingress
+    name: frontend
+- patch: |-
+    - op: replace
+      path: /spec/rules/0/host
+      value: api.staging.gitops.local
+  target:
+    kind: Ingress
+    name: backend
 
+# promote.yml / rollback.yml update newTag here via scripts/set-image-tag.sh.
 images:
-  - name: ghcr.io/Parzivalart3mis/gitops-backend
-    newTag: latest  # promote.yml workflow updates this field
-  - name: ghcr.io/Parzivalart3mis/gitops-frontend
-    newTag: latest
+- name: ghcr.io/parzivalart3mis/gitops-backend
+  newTag: latest
+- name: ghcr.io/parzivalart3mis/gitops-frontend
+  newTag: latest
 
-commonLabels:
-  environment: staging
+labels:
+- includeTemplates: true
+  pairs:
+    environment: staging

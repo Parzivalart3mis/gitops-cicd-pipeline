@@ -1,14 +1,16 @@
+# syntax=docker/dockerfile:1
+#
 # Dockerfile.multistage — optimised multi-stage build for the backend.
+# This is the Dockerfile CI's build-and-push job uses.
 #
-# Stage 1 (test): installs all dependencies and runs pytest.
-#   The build fails here if any test fails, so bad code can never
-#   produce a production image.
+# Stage 1 (test): installs runtime + dev dependencies, runs pytest with an
+#   80 % coverage gate, then stages the application source (minus tests) in
+#   /out.
 #
-# Stage 2 (production): copies only the application source from the
-#   build context (no test code), runs as a non-root user, and has a
-#   minimal attack surface.
-#
-# This is the Dockerfile used by the CI pipeline's build-and-push job.
+# Stage 2 (production): copies its source FROM the test stage. That
+#   dependency matters: BuildKit only builds stages the target depends on, so
+#   a test stage nothing copies from is silently skipped. Because production
+#   needs /out, the tests always run, and a failing test fails the build.
 
 # ---------------------------------------------------------------------------
 # Stage 1 — test runner
@@ -16,18 +18,18 @@
 FROM python:3.12-slim AS test
 
 WORKDIR /app
+ENV PYTHONDONTWRITEBYTECODE=1
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-dev.txt
 
-# Copy entire source including tests for this stage.
-COPY . .
+COPY pyproject.toml ./
+COPY src/ ./src/
 
-# Fail the build if tests don't pass or coverage drops below 80 %.
-RUN pytest src/tests/ -v --tb=short \
-        --cov=src \
-        --cov-report=term-missing \
-        --cov-fail-under=80
+RUN pytest src/tests/ -q --tb=short --cov=src --cov-fail-under=80 \
+    && mkdir -p /out \
+    && cp -r src /out/src \
+    && rm -rf /out/src/tests
 
 # ---------------------------------------------------------------------------
 # Stage 2 — production image
@@ -40,29 +42,34 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 WORKDIR /app
 
-# Create a dedicated system user; never run application code as root.
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+# Fixed UID/GID 1000 so the image user matches the Deployment's
+# runAsUser/runAsGroup. Never run application code as root.
+RUN groupadd --gid 1000 appgroup \
+    && useradd --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin appuser
 
+# Runtime dependencies only; pytest & co. never reach this image.
 COPY requirements.txt .
-# Install only production deps (tests are not run in this stage).
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy only the application source — tests are excluded via .dockerignore.
-COPY src/ ./src/
+# Application source, taken from the stage where the tests just passed.
+COPY --from=test /out/src ./src/
 
-# Drop to non-root before the CMD so the process runs without elevated privileges.
-USER appuser
+# GIT_SHA is baked in as a default; Kubernetes overrides it from the
+# app-config ConfigMap so /healthz reports the deployed commit.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA} \
+    ENVIRONMENT=local \
+    LOG_LEVEL=info \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Numeric USER so kubelet can verify runAsNonRoot without a passwd lookup.
+USER 1000:1000
 
 EXPOSE 8000
 
 # Kubernetes probes call /healthz; this HEALTHCHECK mirrors that probe locally.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')" || exit 1
-
-# GIT_SHA and ENVIRONMENT are injected at runtime via Kubernetes ConfigMap / env vars.
-# Default values here prevent crashes if env vars are missing in local dev.
-ENV GIT_SHA=unknown \
-    ENVIRONMENT=local \
-    LOG_LEVEL=info
 
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -8,8 +8,10 @@
 #   - Resource requests AND limits on every container
 #   - Prometheus scrape annotations
 #
-# Image tag is intentionally 'latest' here; each Kustomize overlay sets
-# the real tag via the images[] transformer so CI writes a single line.
+# The image reference here is a placeholder: each overlay's images[] entry
+# (name: ghcr.io/parzivalart3mis/gitops-backend) sets the real tag, and that
+# name must match this one exactly, lowercase included, or Kustomize leaves
+# the placeholder in place. Registry paths must be lowercase anyway.
 
 apiVersion: apps/v1
 kind: Deployment
@@ -20,7 +22,7 @@ metadata:
     app.kubernetes.io/name: backend
     app.kubernetes.io/component: api
 spec:
-  replicas: 1  # base value — overridden per environment
+  replicas: 1  # initial value — overlays set it; the HPA owns it afterwards
   revisionHistoryLimit: 5  # keep 5 old ReplicaSets so kubectl rollout undo works
   selector:
     matchLabels:
@@ -52,19 +54,31 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
-      # Ensure pods are spread across nodes for HA (best-effort)
+      # Spread pods across nodes for HA — best-effort (ScheduleAnyway), so a
+      # small cluster never blocks scheduling or a rolling update.
+      #   nodeTaintsPolicy: Honor — skip nodes the pod can't run on (e.g. the
+      #     tainted Kind control-plane). The default (Ignore) counts them as
+      #     empty domains, which skews the calculation.
+      #   matchLabelKeys: pod-template-hash — compute skew per ReplicaSet so
+      #     old and new pods don't distort each other during a rollout.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
+          whenUnsatisfiable: ScheduleAnyway
+          nodeTaintsPolicy: Honor
           labelSelector:
             matchLabels:
               app: backend
+          matchLabelKeys:
+            - pod-template-hash
       containers:
         - name: backend
-          # Placeholder image — kustomize overlay sets the real tag via images[]
-          image: ghcr.io/Parzivalart3mis/gitops-backend:latest
-          imagePullPolicy: Always
+          # Placeholder — the overlay's images[] entry sets the real tag.
+          image: ghcr.io/parzivalart3mis/gitops-backend:latest
+          # Tags are immutable git SHAs, so a cached image is always correct.
+          # IfNotPresent also lets `make demo` / `make load-images` use images
+          # side-loaded with `kind load` instead of pulling from GHCR.
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8000

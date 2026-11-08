@@ -5,7 +5,7 @@
 # state to match. This is the core of the GitOps loop.
 #
 # Dev configuration:
-#   - automated: true  → every git push to main auto-deploys to dev
+#   - automated: true  → every git push to master auto-deploys to dev
 #   - selfHeal: true   → manual kubectl changes are reverted (drift detection)
 #   - prune: true      → resources deleted from Git are removed from cluster
 
@@ -32,7 +32,7 @@ spec:
 
   source:
     repoURL: https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git
-    targetRevision: main
+    targetRevision: master  # the repo's default branch; CI commits deploys here
     path: k8s/overlays/dev
 
   destination:
@@ -49,6 +49,7 @@ spec:
       - PrunePropagationPolicy=foreground
       - PruneLast=true                 # delete old resources after new ones are healthy
       - ApplyOutOfSyncOnly=true        # only apply resources that are out of sync
+      - RespectIgnoreDifferences=true  # don't reset HPA-managed replicas on sync
     retry:
       limit: 3
       backoff:

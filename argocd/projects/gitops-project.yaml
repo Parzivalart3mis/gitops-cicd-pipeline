@@ -82,11 +82,14 @@ spec:
       groups:
         - gitops-release-team
 
-  # Sync windows — example: block prod deployments on weekends
+  # Sync windows — block routine prod deployments on weekends.
+  # manualSync: true lets a human still sync during the window, so an
+  # emergency rollback (rollback.yml → argocd app sync gitops-demo-prod) is
+  # never blocked. With false, the deny window would block manual syncs too.
   syncWindows:
     - kind: deny
       schedule: "0 0 * * 0,6"  # midnight on Saturday and Sunday
       duration: 24h
       applications:
         - gitops-demo-prod
-      manualSync: false  # still allow emergency manual syncs
+      manualSync: true

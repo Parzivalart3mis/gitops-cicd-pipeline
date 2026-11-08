@@ -7,10 +7,10 @@ The /healthz endpoint returns the current GIT_SHA and ENVIRONMENT, which proves
 in live demos that a new image version was successfully deployed.
 """
 
-import os
 import logging
+import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 import structlog
 from fastapi import FastAPI, HTTPException
@@ -80,14 +80,19 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS — permissive for local dev; tighten in production via env var
+# CORS
+# In-cluster, the frontend reaches this API through its own Nginx reverse
+# proxy (same origin), so CORS only matters for running the two containers
+# side by side locally. Credentials are disabled: the API uses no cookies or
+# auth, and allow_credentials=True combined with "*" makes Starlette reflect
+# any Origin back with credentials allowed.
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
 )
 
 # ---------------------------------------------------------------------------

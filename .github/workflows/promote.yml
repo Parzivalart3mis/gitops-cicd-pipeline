@@ -1,15 +1,24 @@
 # .github/workflows/promote.yml — Environment promotion workflow.
 #
-# Moves a tested Docker image from one environment to the next in the
-# promotion chain: dev → staging → prod.
+# Moves the image tag that is running in one environment to the next in the
+# chain: dev → staging → prod. Triggered manually (workflow_dispatch), so a
+# human consciously decides to promote.
 #
-# This workflow is triggered manually via workflow_dispatch so a human
-# must consciously decide to promote. The validate job blocks invalid
-# promotion paths (e.g. dev → prod directly).
+# Guarantees, enforced by the validate job:
+#   - only dev → staging and staging → prod (no skipping staging),
+#   - the promoted tag is exactly what the source environment runs ("promote
+#     what you tested"); leave image_tag empty to promote that tag,
+#   - both images exist in GHCR before anything is committed.
 #
-# After promotion, the updated overlay is committed to Git. ArgoCD
-# (if auto-sync is enabled for the target) or a human sync completes
-# the deployment.
+# The promote job runs in the GitHub Environment named after the target
+# (staging / prod). Add required reviewers to the `prod` environment in
+# Settings → Environments to get an approval gate before prod commits.
+#
+# After promotion the overlay commit is in Git. Staging and prod don't
+# auto-sync, so a human then syncs them in Argo CD.
+#
+# Security: free-text inputs reach shell steps only through `env:`, never by
+# `${{ }}` interpolation inside `run:`, so they can't inject commands.
 
 name: Promote Environment
 
@@ -31,149 +40,160 @@ on:
           - staging
           - prod
       image_tag:
-        description: "Image tag (git SHA) to promote — e.g. a1b2c3d"
-        required: true
+        description: "Image tag to promote (git short SHA). Leave empty to promote whatever the source runs."
+        required: false
         type: string
+        default: ""
       reason:
-        description: "Reason for promotion (for audit trail)"
+        description: "Reason for promotion (for the audit trail)"
         required: false
         type: string
         default: "Routine promotion"
 
-env:
-  REGISTRY: ghcr.io
+permissions:
+  contents: read
+
+# One change at a time per target environment. A newer request replaces a
+# still-pending one; a running promotion is never cancelled.
+concurrency:
+  group: deploy-${{ inputs.target_env }}
+  cancel-in-progress: false
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Validate promotion path
+  # Validate path, resolve the tag, check the images exist
   # ---------------------------------------------------------------------------
   validate:
-    name: Validate Promotion Path
+    name: Validate Promotion
     runs-on: ubuntu-latest
+    # Argo CD deploys from the default branch; promoting on any other branch
+    # would commit to a branch nothing deploys from.
+    if: github.ref_name == github.event.repository.default_branch
+    permissions:
+      contents: read
+      packages: read  # inspect images in GHCR
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
 
     steps:
-      - name: Check promotion path is valid
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up kustomize
+        uses: ./.github/actions/setup-kustomize
+
+      - name: Check promotion path and resolve tag
+        id: resolve
+        env:
+          SOURCE: ${{ inputs.source_env }}
+          TARGET: ${{ inputs.target_env }}
+          REQUESTED_TAG: ${{ inputs.image_tag }}
         run: |
-          SOURCE="${{ inputs.source_env }}"
-          TARGET="${{ inputs.target_env }}"
+          set -euo pipefail
+          case "${SOURCE}→${TARGET}" in
+            "dev→staging"|"staging→prod") echo "✅ Valid promotion path: ${SOURCE} → ${TARGET}" ;;
+            "dev→prod") echo "::error::Cannot promote dev → prod directly. Promote to staging first."; exit 1 ;;
+            *)          echo "::error::Invalid promotion path: ${SOURCE} → ${TARGET}"; exit 1 ;;
+          esac
 
-          echo "Promotion: $SOURCE → $TARGET"
-          echo "Image tag: ${{ inputs.image_tag }}"
-          echo "Reason: ${{ inputs.reason }}"
-          echo "Triggered by: ${{ github.actor }}"
-
-          # Enforce valid promotion paths
-          if [[ "$SOURCE" == "dev" && "$TARGET" == "staging" ]]; then
-            echo "✅ Valid promotion path: dev → staging"
-          elif [[ "$SOURCE" == "staging" && "$TARGET" == "prod" ]]; then
-            echo "✅ Valid promotion path: staging → prod"
-          elif [[ "$SOURCE" == "dev" && "$TARGET" == "prod" ]]; then
-            echo "❌ ERROR: Cannot promote dev → prod directly. Must go through staging."
-            exit 1
-          elif [[ "$SOURCE" == "$TARGET" ]]; then
-            echo "❌ ERROR: Source and target environment cannot be the same."
-            exit 1
-          else
-            echo "❌ ERROR: Unknown promotion path: $SOURCE → $TARGET"
-            exit 1
+          backend=$(scripts/get-image-tag.sh "k8s/overlays/${SOURCE}" backend)
+          frontend=$(scripts/get-image-tag.sh "k8s/overlays/${SOURCE}" frontend)
+          echo "${SOURCE} runs backend:${backend} frontend:${frontend}"
+          if [[ "${backend}" != "${frontend}" ]]; then
+            echo "::error::${SOURCE} runs different backend/frontend tags; promote a consistent pair."; exit 1
+          fi
+          if [[ "${backend}" == latest ]]; then
+            echo "::error::${SOURCE} has no SHA tag deployed yet (still 'latest'); nothing to promote."; exit 1
           fi
 
-      - name: Verify image exists in registry
-        run: |
-          # Check that the image tag actually exists before promoting
-          # Uses the GitHub Container Registry API
-          TAG="${{ inputs.image_tag }}"
-          OWNER="${{ github.repository_owner }}"
+          tag="${REQUESTED_TAG:-${backend}}"
+          if [[ ! "${tag}" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::image_tag must be a git SHA (7-40 hex characters), got '${tag}'"; exit 1
+          fi
+          if [[ "${tag}" != "${backend}" ]]; then
+            echo "::error::${tag} is not what ${SOURCE} runs (${backend}). Only the tested tag can be promoted."; exit 1
+          fi
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
-          echo "Verifying ghcr.io/${OWNER}/gitops-backend:${TAG} exists..."
-          # In a real setup: use crane digest or skopeo inspect
-          # Here we use docker manifest inspect as a proxy check
-          docker manifest inspect "ghcr.io/${OWNER}/gitops-backend:${TAG}" 2>/dev/null && \
-            echo "✅ Backend image exists" || \
-            echo "⚠️  Could not verify image (may be private — proceeding)"
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify both images exist in GHCR
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          owner="$(tr '[:upper:]' '[:lower:]' <<< "${GITHUB_REPOSITORY_OWNER}")"
+          for app in backend frontend; do
+            ref="ghcr.io/${owner}/gitops-${app}:${TAG}"
+            if docker buildx imagetools inspect "${ref}" >/dev/null; then
+              echo "✅ ${ref}"
+            else
+              echo "::error::${ref} not found in GHCR"; exit 1
+            fi
+          done
 
   # ---------------------------------------------------------------------------
-  # Perform promotion
+  # Commit the promotion
   # ---------------------------------------------------------------------------
   promote:
     name: Promote ${{ inputs.source_env }} → ${{ inputs.target_env }}
     runs-on: ubuntu-latest
     needs: validate
+    environment: ${{ inputs.target_env }}  # add required reviewers on `prod` for an approval gate
     permissions:
       contents: write
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Credentials are kept on purpose: this job pushes the manifest commit.
+        # It uploads no artifacts, so they can't leak that way.
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # zizmor: ignore[artipacked]
 
-      - name: Install kustomize
+      - name: Set up kustomize
+        uses: ./.github/actions/setup-kustomize
+
+      - name: Commit and push target overlay
+        env:
+          BRANCH: ${{ github.ref_name }}
+          TARGET: ${{ inputs.target_env }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          COMMIT_MESSAGE: |
+            chore(promote): ${{ inputs.source_env }} → ${{ inputs.target_env }} [${{ needs.validate.outputs.tag }}]
+
+            Promoted by: ${{ github.actor }}
+            Reason: ${{ inputs.reason }}
+            Source: ${{ inputs.source_env }} environment
+            Target: ${{ inputs.target_env }} environment
+            Image tag: ${{ needs.validate.outputs.tag }}
+
+            Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: scripts/ci/push-overlay-change.sh "${TARGET}" "${TAG}" all
+
+      - name: Next steps
+        env:
+          TARGET: ${{ inputs.target_env }}
+          TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
-
-      - name: Update target environment manifests
-        run: |
-          TARGET="${{ inputs.target_env }}"
-          TAG="${{ inputs.image_tag }}"
-          OWNER="${{ github.repository_owner }}"
-
-          cd k8s/overlays/${TARGET}
-
-          kustomize edit set image \
-            ghcr.io/${OWNER}/gitops-backend=ghcr.io/${OWNER}/gitops-backend:${TAG}
-          kustomize edit set image \
-            ghcr.io/${OWNER}/gitops-frontend=ghcr.io/${OWNER}/gitops-frontend:${TAG}
-
-          echo "Updated $TARGET overlay to use image tag: $TAG"
-
-      - name: Update GIT_SHA in target env config patch
-        run: |
-          TARGET="${{ inputs.target_env }}"
-          TAG="${{ inputs.image_tag }}"
-          sed -i "s/git_sha: .*/git_sha: \"${TAG}\"/" \
-            k8s/overlays/${TARGET}/patches/env-config.yaml
-
-      - name: Commit and push promotion
-        run: |
-          SOURCE="${{ inputs.source_env }}"
-          TARGET="${{ inputs.target_env }}"
-          TAG="${{ inputs.image_tag }}"
-
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k8s/overlays/${TARGET}/
-
-          git commit -m "chore(promote): ${SOURCE} → ${TARGET} [${TAG}]
-
-          Promoted by: ${{ github.actor }}
-          Reason: ${{ inputs.reason }}
-          Source: ${SOURCE} environment
-          Target: ${TARGET} environment
-          Image tag: ${TAG}
-
-          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          git push
-
-      - name: Print next steps
-        run: |
-          TARGET="${{ inputs.target_env }}"
-          echo ""
-          echo "============================================================"
-          echo "✅ Promotion complete!"
-          echo "============================================================"
-          echo ""
-          echo "The ${TARGET} overlay has been updated with image tag: ${{ inputs.image_tag }}"
-          echo ""
-          if [[ "$TARGET" == "staging" ]]; then
-            echo "ArgoCD for staging is set to MANUAL sync."
-            echo "To complete the deployment, run:"
-            echo "  argocd app sync gitops-demo-staging"
-            echo "  OR use the ArgoCD UI at http://localhost:30080"
-          elif [[ "$TARGET" == "prod" ]]; then
-            echo "ArgoCD for prod is set to MANUAL sync."
-            echo "Verify staging is healthy before syncing prod:"
-            echo "  argocd app get gitops-demo-staging"
-            echo "  argocd app sync gitops-demo-prod"
-          fi
+          {
+            echo "## ✅ Promoted \`${TAG}\` to ${TARGET}"
+            echo ""
+            echo "The ${TARGET} overlay now points at \`${TAG}\`. Argo CD does not auto-sync ${TARGET}; sync it:"
+            echo ""
+            echo '```'
+            if [[ "${TARGET}" == prod ]]; then
+              echo "argocd app get gitops-demo-staging   # confirm staging is Healthy first"
+            fi
+            echo "argocd app sync gitops-demo-${TARGET}"
+            echo '```'
+            echo ""
+            echo "or use the Argo CD UI (http://localhost:30080)."
+          } >> "${GITHUB_STEP_SUMMARY}"

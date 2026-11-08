@@ -25,6 +25,7 @@ graph TB
             Prometheus[Prometheus\nMetrics Store]
             Grafana[Grafana\nDashboards]
             Loki[Loki\nLog Store]
+            Alloy[Grafana Alloy\nLog Shipper]
         end
 
         subgraph IngressNS ["ingress-nginx namespace"]
@@ -68,9 +69,12 @@ graph TB
     GHCR -->|pull image| ProdNS
     Browser -->|HTTP| Ingress
     Ingress --> FrontendDev
-    FrontendDev -->|API calls| BackendDev
+    FrontendDev -->|/backend proxy| BackendDev
     BackendDev -->|/metrics| Prometheus
     Prometheus --> Grafana
+    BackendDev -.->|pod logs| Alloy
+    Alloy --> Loki
+    Loki --> Grafana
     OPA -->|admission webhook| DevNS
     OPA -->|admission webhook| StagingNS
     OPA -->|admission webhook| ProdNS

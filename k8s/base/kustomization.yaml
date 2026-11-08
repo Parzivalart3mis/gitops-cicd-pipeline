@@ -1,7 +1,8 @@
 # k8s/base/kustomization.yaml — Root Kustomize base configuration.
 #
 # Contains all resources shared across environments. Environment-specific
-# overrides (replica counts, resource limits, image tags) live in overlays/.
+# overrides (replica counts, HPA ranges, resource limits, quotas, ingress
+# hosts, image tags) live in overlays/.
 #
 # Why Kustomize instead of Helm?
 #   - No templating language to learn; pure YAML with strategic merge patches.
@@ -28,9 +29,15 @@ resources:
   - common/resource-quota.yaml
   - common/pod-disruption-budget.yaml
 
-# Common labels applied to ALL resources in this base.
-# Overlays inherit these and can add more.
-commonLabels:
-  app.kubernetes.io/part-of: gitops-demo
-  app.kubernetes.io/managed-by: kustomize
-  team: platform
+# Labels applied to every resource's metadata and to pod templates.
+# includeSelectors is false on purpose: selectors are immutable on
+# Deployments, so they stay minimal (app: <name>) and adding or renaming a
+# label later never forces a Deployment to be recreated. (The deprecated
+# commonLabels field always wrote labels into selectors.)
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: gitops-demo
+      app.kubernetes.io/managed-by: kustomize
+      team: platform
+    includeSelectors: false
+    includeTemplates: true

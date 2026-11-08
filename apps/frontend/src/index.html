@@ -6,8 +6,10 @@
   displays the current deployment version. The version banner is the key
   visual proof in demos that a new Docker image was deployed successfully.
 
-  __BACKEND_URL__ is replaced at container start-time by the entrypoint
-  script (entrypoint.sh) so the same image works across all environments.
+  Two placeholders are replaced at container start-time by entrypoint.sh,
+  so the same image works across all environments: the backend URL (in
+  Kubernetes "/backend", which this container's Nginx reverse-proxies to the
+  backend Service) and the frontend version.
 -->
 <html lang="en">
 <head>

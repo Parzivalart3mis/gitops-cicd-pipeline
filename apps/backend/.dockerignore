@@ -13,8 +13,9 @@ dist/
 build/
 .eggs/
 
-# Tests (not needed in the production image stage)
-src/tests/
+# Test artefacts. The tests themselves (src/tests/) must stay in the build
+# context: Dockerfile.multistage runs them in its test stage, and the
+# production stage copies only the non-test source out of that stage.
 .pytest_cache/
 .coverage
 htmlcov/

@@ -1,17 +1,22 @@
 # argocd/applicationsets/multi-env.yaml — ApplicationSet for all environments.
 #
 # An ApplicationSet generates ArgoCD Application resources automatically
-# from a template + a list generator. This eliminates the need to maintain
-# three near-identical Application YAML files (dev/staging/prod).
+# from a template + a list generator, replacing three near-identical
+# Application files with one source of truth. In production GitOps setups,
+# ApplicationSets generate Applications across many clusters/environments.
 #
-# In production GitOps setups, ApplicationSets are used to generate
-# Applications across hundreds of clusters or environments from a single
-# source of truth.
+# ⚠ ALTERNATIVE, NOT ADDITION: this generates Applications with the SAME
+# names as argocd/applications/{dev,staging,prod}.yaml (gitops-demo-<env>).
+# Apply one approach or the other. `make setup` uses applications/. To switch:
 #
-# Why we still have individual application files (applications/dev.yaml etc.):
-#   The individual files document per-environment nuances (auto-sync ON/OFF,
-#   sync windows, notes). The ApplicationSet is provided as an *alternative*
-#   pattern demonstration — use one or the other, not both simultaneously.
+#   kubectl delete -f argocd/applications/      # removes the Application objects
+#   kubectl apply  -f argocd/applicationsets/multi-env.yaml
+#
+# (The Applications carry the resources-finalizer, so deleting them prunes
+# the workloads first; ArgoCD then recreates them from this ApplicationSet.)
+#
+# Go templating + templatePatch reproduce the per-environment differences of
+# the individual files: only dev gets automated sync with self-heal.
 
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
@@ -22,7 +27,11 @@ metadata:
     app.kubernetes.io/managed-by: argocd
     team: platform
 spec:
-  # Preserve Applications that were manually modified (don't overwrite)
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+
+  # Deleting the ApplicationSet deletes its Applications (and, through their
+  # finalizer, the workloads). Set true to keep them instead.
   syncPolicy:
     preserveResourcesOnDeletion: false
 
@@ -31,26 +40,20 @@ spec:
         elements:
           - environment: dev
             namespace: gitops-dev
-            autoSync: "true"
-            selfHeal: "true"
-            minReplicas: "1"
+            autoSync: true
           - environment: staging
             namespace: gitops-staging
-            autoSync: "false"
-            selfHeal: "false"
-            minReplicas: "2"
+            autoSync: false   # manual sync — promotion gate
           - environment: prod
             namespace: gitops-prod
-            autoSync: "false"
-            selfHeal: "false"
-            minReplicas: "3"
+            autoSync: false   # manual sync — human approval
 
   template:
     metadata:
-      name: "gitops-demo-{{environment}}"
+      name: "gitops-demo-{{ .environment }}"
       namespace: argocd
       labels:
-        environment: "{{environment}}"
+        environment: "{{ .environment }}"
         team: platform
         generated-by: applicationset
       finalizers:
@@ -59,18 +62,35 @@ spec:
       project: gitops-demo
       source:
         repoURL: https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git
-        targetRevision: main
-        path: "k8s/overlays/{{environment}}"
+        targetRevision: master
+        path: "k8s/overlays/{{ .environment }}"
       destination:
         server: https://kubernetes.default.svc
-        namespace: "{{namespace}}"
+        namespace: "{{ .namespace }}"
       syncPolicy:
         syncOptions:
           - CreateNamespace=true
           - PrunePropagationPolicy=foreground
           - PruneLast=true
+          - RespectIgnoreDifferences=true
+      # The HPA owns replica counts; don't report or revert them as drift.
       ignoreDifferences:
         - group: apps
           kind: Deployment
           jsonPointers:
             - /spec/replicas
+
+  # Adds automated sync only where autoSync is true (booleans, not strings:
+  # with goTemplate the string "false" would be truthy). The label keeps the
+  # rendered patch non-empty for every element.
+  templatePatch: |
+    metadata:
+      labels:
+        sync-mode: {{ if .autoSync }}auto{{ else }}manual{{ end }}
+    {{- if .autoSync }}
+    spec:
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+    {{- end }}

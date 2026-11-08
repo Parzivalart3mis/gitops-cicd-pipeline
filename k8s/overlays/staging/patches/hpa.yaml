@@ -1,0 +1,20 @@
+# patches/hpa.yaml — Staging autoscaling range.
+# minReplicas matches patches/replica-count.yaml; the base ResourceQuota is
+# sized for maxReplicas + 1 surge pod per Deployment.
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+spec:
+  minReplicas: 2
+  maxReplicas: 4
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend
+spec:
+  minReplicas: 2
+  maxReplicas: 4

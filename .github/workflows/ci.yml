@@ -1,89 +1,79 @@
 # .github/workflows/ci.yml — Main CI pipeline.
 #
 # Triggered on:
-#   - Push to main or develop (runs full pipeline including build+push)
-#   - Pull requests against main or develop (runs lint/test/scan only)
+#   - Push to master or develop (full pipeline; images are built and pushed)
+#   - Pull requests against master or develop (lint/test/scan only)
 #
-# Job dependency chain:
-#   lint-and-test → security-scan → build-and-push → update-manifests
+# Job graph:
+#   backend ─┐
+#   frontend ├─► security-scan ─► build-and-push ─► update-manifests
+#   manifests┘                    (push only)        (push to master only)
 #
-# The final update-manifests job writes the new image tag back to the
-# k8s/overlays/dev/kustomization.yaml and pushes a commit. That commit
-# is what ArgoCD detects to trigger a deployment — the GitOps loop.
+# update-manifests commits the new image tag to k8s/overlays/dev. That
+# commit is what Argo CD detects to deploy dev — the GitOps loop. It is
+# pushed with GITHUB_TOKEN, which by design does not trigger another run.
+#
+# Supply chain: every third-party action is pinned to a full commit SHA (the
+# version is in the trailing comment), tools are pinned with checksums where
+# downloaded, and Python tooling is pinned in apps/backend/requirements-dev.txt.
 
 name: CI Pipeline
 
 on:
   push:
-    branches: [master, main, develop]
+    branches: [master, develop]
   pull_request:
-    branches: [master, main, develop]
+    branches: [master, develop]
 
-# Cancel in-progress runs for the same branch/PR to avoid wasted compute.
+# Least privilege by default; jobs that need more ask for it.
+permissions:
+  contents: read
+
+# Cancel superseded runs for the same branch/PR.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  REGISTRY: ghcr.io
-  BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/gitops-backend
-  FRONTEND_IMAGE: ghcr.io/${{ github.repository_owner }}/gitops-frontend
   PYTHON_VERSION: "3.12"
-  NODE_VERSION: "20"
+  PIP_AUDIT_VERSION: "2.10.1"
+  KUBESEC_VERSION: "2.15.0"
+  KUBESEC_SHA256: "69a03d83c53112499971755de4741d149d9ed0ab5cdea4682efb5cf95c6ef8e7"
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Job 1: Lint and Test
+  # Backend: lint, type-check, unit tests with an 80 % coverage gate
   # ---------------------------------------------------------------------------
-  lint-and-test:
-    name: Lint & Test
+  backend:
+    name: Backend · lint, types, tests
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        app: [backend, frontend]
-      fail-fast: false  # test both apps even if one fails
+    defaults:
+      run:
+        working-directory: apps/backend
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Detect changed files
-        uses: dorny/paths-filter@v3
-        id: changes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          filters: |
-            backend:
-              - 'apps/backend/**'
-            frontend:
-              - 'apps/frontend/**'
-            k8s:
-              - 'k8s/**'
+          persist-credentials: false
 
-      # ---- Backend: Python ----
       - name: Set up Python
-        if: matrix.app == 'backend'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: apps/backend/requirements.txt
+          cache-dependency-path: apps/backend/requirements*.txt
 
-      - name: Install backend dependencies
-        if: matrix.app == 'backend'
-        working-directory: apps/backend
-        run: pip install -r requirements.txt
+      - name: Install dependencies (runtime + pinned dev tools)
+        run: pip install -r requirements-dev.txt
 
-      - name: Lint backend (ruff)
-        if: matrix.app == 'backend'
-        working-directory: apps/backend
-        run: |
-          pip install ruff mypy
-          ruff check src/
-          mypy src/ --ignore-missing-imports
+      - name: Lint (ruff)
+        run: ruff check src/
 
-      - name: Run backend tests with coverage
-        if: matrix.app == 'backend'
-        working-directory: apps/backend
+      - name: Type-check (mypy)
+        run: mypy src/
+
+      - name: Run tests with coverage
         run: |
           pytest src/tests/ -v \
             --tb=short \
@@ -95,174 +85,288 @@ jobs:
           ENVIRONMENT: test
           GIT_SHA: ${{ github.sha }}
 
-      - name: Upload backend coverage report
-        if: matrix.app == 'backend' && always()
-        uses: actions/upload-artifact@v4
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-coverage
           path: apps/backend/coverage.xml
           retention-days: 7
-
-      # ---- Frontend: Nginx config lint ----
-      - name: Lint Nginx config
-        if: matrix.app == 'frontend'
-        run: |
-          docker run --rm \
-            -v "$PWD/apps/frontend/nginx.conf:/etc/nginx/nginx.conf:ro" \
-            nginx:1.27.0-alpine \
-            nginx -t -c /etc/nginx/nginx.conf 2>&1 || true
-
-      # ---- Kubernetes manifest validation (runs once, not per matrix) ----
-      - name: Validate Kustomize builds
-        if: matrix.app == 'backend'
-        run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
-          for env in dev staging prod; do
-            echo "=== Validating overlay: $env ==="
-            kustomize build k8s/overlays/$env > /dev/null
-            echo "✅ $env overlay is valid"
-          done
-
-      - name: Lint shell scripts (shellcheck)
-        if: matrix.app == 'backend'
-        run: |
-          sudo apt-get install -y shellcheck
-          shellcheck --severity=error scripts/*.sh
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # Job 2: Security Scan
+  # Frontend: build the real image, validate its Nginx config, smoke-test it
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend · image, nginx config, headers
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build frontend image
+        run: docker build -f apps/frontend/Dockerfile.multistage -t gitops-frontend:ci apps/frontend
+
+      # Runs through entrypoint.sh, so the generated /backend proxy snippet is
+      # validated too. 127.0.0.1 because `nginx -t` resolves upstream hosts.
+      - name: Validate Nginx config (nginx -t)
+        run: docker run --rm -e BACKEND_UPSTREAM=http://127.0.0.1:8000 gitops-frontend:ci nginx -t
+
+      - name: Smoke-test container (security headers, proxy, placeholders)
+        run: |
+          set -euo pipefail
+          # Port 9 refuses connections: a 502 proves /backend/ is proxied.
+          docker run -d --name fe -p 8080:8080 \
+            -e BACKEND_URL=/backend -e BACKEND_UPSTREAM=http://127.0.0.1:9 \
+            gitops-frontend:ci
+          trap 'docker logs fe; docker rm -f fe >/dev/null' EXIT
+          for _ in $(seq 1 30); do curl -fsS http://localhost:8080/healthz >/dev/null && break; sleep 1; done
+
+          fail=0
+          # add_header in a location silently drops inherited security
+          # headers, so check every location type, not just one.
+          for path in / /index.html /healthz; do
+            headers=$(curl -fsS -D - -o /dev/null "http://localhost:8080${path}")
+            for h in X-Frame-Options X-Content-Type-Options Content-Security-Policy Referrer-Policy; do
+              if ! grep -qi "^${h}:" <<< "${headers}"; then
+                echo "::error::${h} header missing on ${path}"; fail=1
+              fi
+            done
+          done
+          curl -fsS http://localhost:8080/ | grep -q "const BACKEND_URL = '/backend'" \
+            || { echo "::error::BACKEND_URL placeholder not substituted"; fail=1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/backend/healthz)
+          [[ "${code}" == 502 ]] \
+            || { echo "::error::/backend/ is not proxied (got HTTP ${code}, expected 502)"; fail=1; }
+          exit "${fail}"
+
+  # ---------------------------------------------------------------------------
+  # Manifests and scripts
+  # ---------------------------------------------------------------------------
+  manifests:
+    name: Manifests & scripts
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up kustomize
+        uses: ./.github/actions/setup-kustomize
+
+      # Renders every overlay and enforces the invariants that previously
+      # broke deployments silently (image names, tag/version consistency,
+      # unique ingress hosts, no warnings). See the script header.
+      - name: Validate Kustomize overlays
+        run: scripts/ci/validate-manifests.sh
+
+      - name: Lint shell scripts (shellcheck)
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y shellcheck; }
+          shellcheck --severity=warning -x scripts/*.sh scripts/ci/*.sh apps/frontend/entrypoint.sh
+
+  # ---------------------------------------------------------------------------
+  # Security scans (all blocking)
   # ---------------------------------------------------------------------------
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest
-    needs: lint-and-test
+    needs: [backend, frontend, manifests]
     permissions:
-      security-events: write  # required to upload SARIF results
+      contents: read
+      security-events: write  # upload SARIF to the Security tab
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Run Trivy filesystem scan (source code)
-        uses: aquasecurity/trivy-action@master
+      # Report: every finding goes to the Security tab, never fails the job.
+      - name: Trivy filesystem scan (SARIF report)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: fs
           scan-ref: .
+          scanners: vuln,secret
           format: sarif
           output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          exit-code: "0"  # don't fail the build on source scan; we scan images too
-          ignore-unfixed: true
+          exit-code: "0"
 
+      # Pull requests from forks get a read-only token and can't upload SARIF.
       - name: Upload Trivy results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: trivy-results.sarif
+          category: trivy-fs
 
-      - name: Scan Python dependencies for known vulnerabilities
-        working-directory: apps/backend
-        run: |
-          pip install safety
-          safety check -r requirements.txt --full-report || true
-          # Non-blocking: report findings but don't fail the pipeline.
-          # Adjust to exit-code 1 when you want hard failures.
-
-      - name: Run kubesec scan on Kubernetes manifests
-        run: |
-          curl -sSL https://github.com/controlplaneio/kubesec/releases/download/v2.13.0/kubesec_linux_amd64.tar.gz | \
-            tar xz && sudo mv kubesec /usr/local/bin/
-
-          echo "=== Scanning backend deployment ==="
-          kubesec scan k8s/base/backend/deployment.yaml | \
-            python3 -c "
-          import sys, json
-          results = json.load(sys.stdin)
-          for r in results:
-              score = r.get('score', 0)
-              print(f'Score: {score}')
-              if score < 0:
-                  print('FAIL: kubesec score is negative')
-                  sys.exit(1)
-          print('PASS: kubesec score is acceptable')
-          "
-
-          echo "=== Scanning frontend deployment ==="
-          kubesec scan k8s/base/frontend/deployment.yaml | \
-            python3 -c "
-          import sys, json
-          results = json.load(sys.stdin)
-          for r in results:
-              score = r.get('score', 0)
-              print(f'Score: {score}')
-          "
-
-      - name: Upload security scan artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
+      # Gate: fixable CRITICAL/HIGH vulnerabilities or committed secrets fail
+      # the build (same settings as security/trivy/trivy-config.yaml).
+      - name: Trivy filesystem scan (gate)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          name: security-scan-results
-          path: trivy-results.sarif
-          retention-days: 30
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: table
+          exit-code: "1"
+          skip-setup-trivy: true  # installed by the previous step
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # pip-audit (PyPA, OSV/PyPI advisories, no account needed) replaces
+      # `safety check`, which was deprecated and ran with `|| true`.
+      # Audits runtime and dev dependencies, since both run in CI.
+      - name: Audit Python dependencies (pip-audit)
+        run: |
+          pip install "pip-audit==${PIP_AUDIT_VERSION}"
+          pip-audit --strict -r apps/backend/requirements-dev.txt
+
+      - name: Score Deployments with kubesec
+        run: |
+          set -euo pipefail
+          tarball="${RUNNER_TEMP}/kubesec.tar.gz"
+          curl -fsSL -o "${tarball}" \
+            "https://github.com/controlplaneio/kubesec/releases/download/v${KUBESEC_VERSION}/kubesec_linux_amd64.tar.gz"
+          echo "${KUBESEC_SHA256}  ${tarball}" | sha256sum --check --strict -
+          tar -xzf "${tarball}" -C "${RUNNER_TEMP}" kubesec
+
+          fail=0
+          for app in backend frontend; do
+            score=$("${RUNNER_TEMP}/kubesec" scan "k8s/base/${app}/deployment.yaml" | jq '[.[].score] | min')
+            echo "${app}: kubesec score ${score}"
+            if (( score < 0 )); then
+              echo "::error::kubesec score for ${app} is negative (${score})"; fail=1
+            fi
+          done
+          exit "${fail}"
 
   # ---------------------------------------------------------------------------
-  # Job 3: Build and Push Docker Images
+  # Build, test, scan, then push images (pushes only)
   # ---------------------------------------------------------------------------
   build-and-push:
-    name: Build & Push
+    name: Build & Push (${{ matrix.app }})
     runs-on: ubuntu-latest
     needs: security-scan
-    # Only build on pushes (not PRs) to avoid publishing untested PR code
     if: github.event_name == 'push'
     permissions:
       contents: read
-      packages: write  # required to push to GHCR
+      packages: write  # push to GHCR
 
     strategy:
       matrix:
         app: [backend, frontend]
 
-    outputs:
-      image-tag: ${{ steps.meta.outputs.version }}
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Set lowercase owner
-        id: owner
-        run: echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+      # GHCR repository paths must be lowercase; the owner isn't.
+      - name: Compute image name and short SHA
+        id: vars
+        run: |
+          owner="$(tr '[:upper:]' '[:lower:]' <<< "${GITHUB_REPOSITORY_OWNER}")"
+          echo "image=ghcr.io/${owner}/gitops-${{ matrix.app }}" >> "${GITHUB_OUTPUT}"
+          echo "sha=${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Docker metadata (tags, labels)
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/gitops-${{ matrix.app }}
+          images: ${{ steps.vars.outputs.image }}
           tags: |
-            # Git SHA short tag — this is the primary immutable tag used in manifests
+            # Short git SHA — the immutable tag the overlays deploy
             type=sha,prefix=,format=short
-            # Branch name tag — useful for quick "what's on main?" lookups
+            # Branch name — "what's on develop?" lookups
             type=ref,event=branch
-            # Latest tag — convenient but never used in staging/prod manifests
+            # latest — convenience only; never deployed (Gatekeeper blocks it)
             type=raw,value=latest,enable={{is_default_branch}}
           labels: |
             org.opencontainers.image.title=gitops-${{ matrix.app }}
             org.opencontainers.image.description=GitOps CI/CD demo ${{ matrix.app }}
             org.opencontainers.image.vendor=GitOps Demo
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+      # Build into the local Docker daemon first so the image is smoke-tested
+      # and scanned BEFORE anything reaches the registry. For the backend,
+      # this build also runs the test stage of Dockerfile.multistage.
+      - name: Build image (local, not pushed)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: apps/${{ matrix.app }}
+          file: apps/${{ matrix.app }}/Dockerfile.multistage
+          load: true
+          push: false
+          tags: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha }}
+          build-args: |
+            GIT_SHA=${{ steps.vars.outputs.sha }}
+            FRONTEND_VERSION=${{ steps.vars.outputs.sha }}
+          cache-from: type=gha,scope=${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
+
+      - name: Smoke-test backend image
+        if: matrix.app == 'backend'
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha }}
+          SHA: ${{ steps.vars.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker run -d --name app -p 8000:8000 --read-only --tmpfs /tmp "${IMAGE}"
+          trap 'docker logs app; docker rm -f app >/dev/null' EXIT
+          for _ in $(seq 1 30); do curl -fsS http://localhost:8000/healthz >/dev/null && break; sleep 1; done
+          version=$(curl -fsS http://localhost:8000/healthz | jq -r .version)
+          [[ "${version}" == "${SHA}" ]] || { echo "::error::/healthz version '${version}' != '${SHA}'"; exit 1; }
+          curl -fsS http://localhost:8000/readyz
+          curl -fsS -X POST http://localhost:8000/api/v1/items \
+            -H 'Content-Type: application/json' -d '{"name":"smoke","quantity":1}'
+          curl -fsS http://localhost:8000/metrics | grep -q '^http_requests_total'
+
+      - name: Smoke-test frontend image
+        if: matrix.app == 'frontend'
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha }}
+        run: |
+          set -euo pipefail
+          docker run --rm -e BACKEND_UPSTREAM=http://127.0.0.1:8000 "${IMAGE}" nginx -t
+          docker run -d --name fe -p 8080:8080 "${IMAGE}"
+          trap 'docker logs fe; docker rm -f fe >/dev/null' EXIT
+          for _ in $(seq 1 30); do curl -fsS http://localhost:8080/healthz >/dev/null && break; sleep 1; done
+          curl -fsS -D - -o /dev/null http://localhost:8080/ | grep -qi '^Content-Security-Policy:'
+
+      - name: Scan image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true  # skip CVEs with no available fix
+          exit-code: "1"        # fail on fixable CRITICAL vulnerabilities
+
+      # Same inputs + warm cache: this re-uses the layers built above.
+      - name: Push image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: apps/${{ matrix.app }}
           file: apps/${{ matrix.app }}/Dockerfile.multistage
@@ -270,81 +374,47 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            GIT_SHA=${{ github.sha }}
-            FRONTEND_VERSION=${{ github.sha }}
-          # Use GitHub Actions cache for Docker layers to speed up builds
+            GIT_SHA=${{ steps.vars.outputs.sha }}
+            FRONTEND_VERSION=${{ steps.vars.outputs.sha }}
           cache-from: type=gha,scope=${{ matrix.app }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.app }}
-
-      - name: Scan built image for vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ steps.owner.outputs.name }}/gitops-${{ matrix.app }}:${{ steps.meta.outputs.version }}
-          format: table
-          severity: CRITICAL
-          ignore-unfixed: true  # skip CVEs with no available fix (e.g. will_not_fix OS packages)
-          exit-code: "1"  # fail on CRITICAL vulnerabilities that DO have a fix available
 
   # ---------------------------------------------------------------------------
-  # Job 4: Update Kubernetes Manifests (the GitOps commit)
+  # The GitOps commit: point dev at the new images
   # ---------------------------------------------------------------------------
   update-manifests:
     name: Update Dev Manifests
     runs-on: ubuntu-latest
     needs: build-and-push
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
     permissions:
-      contents: write  # required to push the manifest update commit
+      contents: write  # push the manifest commit
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Credentials are kept on purpose: this job pushes the manifest commit.
+        # It uploads no artifacts, so they can't leak that way. Full history
+        # because push-overlay-change.sh compares commit ancestry.
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
+          fetch-depth: 0  # zizmor: ignore[artipacked]
 
-      - name: Install kustomize
-        run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
+      - name: Set up kustomize
+        uses: ./.github/actions/setup-kustomize
 
-      - name: Compute short SHA and lowercase owner
-        id: sha
-        run: |
-          echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
-          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+      - name: Compute short SHA
+        id: vars
+        run: echo "sha=${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
 
-      - name: Update image tags in dev overlay
-        run: |
-          cd k8s/overlays/dev
-          kustomize edit set image \
-            ghcr.io/${{ steps.sha.outputs.owner }}/gitops-backend=ghcr.io/${{ steps.sha.outputs.owner }}/gitops-backend:${{ steps.sha.outputs.short }}
-          kustomize edit set image \
-            ghcr.io/${{ steps.sha.outputs.owner }}/gitops-frontend=ghcr.io/${{ steps.sha.outputs.owner }}/gitops-frontend:${{ steps.sha.outputs.short }}
+      # Re-applies the change on the latest branch tip and retries if another
+      # workflow pushed first; skips if dev already runs a newer commit.
+      - name: Commit and push dev image tags
+        env:
+          BRANCH: ${{ github.ref_name }}
+          SOURCE_SHA: ${{ github.sha }}
+          TAG: ${{ steps.vars.outputs.sha }}
+          COMMIT_MESSAGE: |
+            chore(deploy): update dev images to ${{ steps.vars.outputs.sha }}
 
-      - name: Also update GIT_SHA in the app ConfigMap
-        run: |
-          # Patch the git_sha key in the dev env-config patch so /healthz
-          # returns the exact commit SHA for verification during demos.
-          sed -i "s/git_sha: .*/git_sha: \"${{ steps.sha.outputs.short }}\"/" \
-            k8s/overlays/dev/patches/env-config.yaml
-
-      - name: Commit and push manifest changes
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k8s/overlays/dev/
-
-          # Only commit if there are actual changes (idempotent)
-          if git diff --staged --quiet; then
-            echo "No manifest changes to commit"
-          else
-            git commit -m "chore(deploy): update dev images to ${{ steps.sha.outputs.short }}
-
-          - Backend:  ghcr.io/${{ steps.sha.outputs.owner }}/gitops-backend:${{ steps.sha.outputs.short }}
-          - Frontend: ghcr.io/${{ steps.sha.outputs.owner }}/gitops-frontend:${{ steps.sha.outputs.short }}
-
-          Triggered by: ${{ github.actor }} @ ${{ github.sha }}
-          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            git push
-          fi
+            Triggered by: ${{ github.actor }} @ ${{ github.sha }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: scripts/ci/push-overlay-change.sh dev "${TAG}" all

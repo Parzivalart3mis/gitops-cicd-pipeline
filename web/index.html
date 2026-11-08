@@ -347,7 +347,7 @@
         <div>
           <h3>Declarative delivery, end to end</h3>
           <p>
-            Push to <code>main</code> and the pipeline lints, tests, security-scans, builds multi-stage
+            Push to <code>master</code> and the pipeline lints, tests, security-scans, builds multi-stage
             container images, and commits the new image tag back to the repo. ArgoCD detects the commit
             and rolls the change out to the cluster automatically.
           </p>
@@ -434,7 +434,7 @@
       <div class="section-head">
         <div class="eyebrow">CI/CD workflow &amp; architecture</div>
         <h2>From <code>git push</code> to running pods</h2>
-        <p>Four CI jobs run in sequence on every push to <code>main</code>. The final job commits an image-tag bump — and that commit is what triggers ArgoCD.</p>
+        <p>Four CI stages run on every push to <code>master</code>. The final job commits an image-tag bump — and that commit is what triggers ArgoCD.</p>
       </div>
 
       <!-- CI pipeline stages -->
@@ -448,23 +448,23 @@
         <div class="pipe-stage">
           <div class="snum">JOB 2</div><div class="sico">🔐</div>
           <h5>Security Scan</h5>
-          <p>Trivy · safety · kubesec → SARIF to GitHub</p>
+          <p>Trivy · pip-audit · kubesec → SARIF to GitHub</p>
         </div>
         <div class="pipe-arrow">→</div>
         <div class="pipe-stage">
           <div class="snum">JOB 3</div><div class="sico">📦</div>
           <h5>Build &amp; Push</h5>
-          <p>Multi-stage build → GHCR · image scan blocks CRITICAL</p>
+          <p>Multi-stage build → smoke test → image scan → GHCR</p>
         </div>
         <div class="pipe-arrow">→</div>
         <div class="pipe-stage">
           <div class="snum">JOB 4</div><div class="sico">✍️</div>
           <h5>Update Manifests</h5>
-          <p>kustomize edit set image → commit tag bump</p>
+          <p>set-image-tag.sh → commit tag bump</p>
         </div>
       </div>
 
-      <div class="flow-label"><span>↓ commit to main triggers ArgoCD reconciliation ↓</span></div>
+      <div class="flow-label"><span>↓ commit to master triggers ArgoCD reconciliation ↓</span></div>
 
       <!-- Architecture nodes -->
       <div class="arch">
@@ -528,7 +528,7 @@
           <h4><span class="ti">🚀</span> CI / CD &amp; GitOps</h4>
           <div class="tech-list">
             <span class="chip">GitHub Actions</span>
-            <span class="chip">ArgoCD <span class="cv">v2.11</span></span>
+            <span class="chip">ArgoCD <span class="cv">v3.6</span></span>
             <span class="chip">Kustomize <span class="cv">v5.4</span></span>
             <span class="chip">Helm <span class="cv">v3.15</span></span>
           </div>
@@ -544,17 +544,18 @@
         <div class="tech-cat">
           <h4><span class="ti">🧩</span> Application</h4>
           <div class="tech-list">
-            <span class="chip">FastAPI <span class="cv">0.111</span></span>
+            <span class="chip">FastAPI <span class="cv">0.162</span></span>
             <span class="chip">Python <span class="cv">3.12</span></span>
-            <span class="chip">Nginx <span class="cv">1.27</span></span>
+            <span class="chip">Nginx <span class="cv">1.30</span></span>
           </div>
         </div>
         <div class="tech-cat">
           <h4><span class="ti">📈</span> Observability</h4>
           <div class="tech-list">
-            <span class="chip">Prometheus <span class="cv">v2.53</span></span>
-            <span class="chip">Grafana <span class="cv">v11</span></span>
+            <span class="chip">Prometheus <span class="cv">v3.16</span></span>
+            <span class="chip">Grafana <span class="cv">v13</span></span>
             <span class="chip">Loki</span>
+            <span class="chip">Alloy</span>
             <span class="chip">structlog</span>
           </div>
         </div>
@@ -562,10 +563,10 @@
           <h4><span class="ti">🔒</span> Security</h4>
           <div class="tech-list">
             <span class="chip">Trivy</span>
-            <span class="chip">OPA Gatekeeper <span class="cv">v3.16</span></span>
-            <span class="chip">Sealed Secrets <span class="cv">v0.27</span></span>
+            <span class="chip">OPA Gatekeeper <span class="cv">v3.23</span></span>
+            <span class="chip">Sealed Secrets <span class="cv">v0.41</span></span>
             <span class="chip">kubesec</span>
-            <span class="chip">safety</span>
+            <span class="chip">pip-audit</span>
           </div>
         </div>
         <div class="tech-cat">

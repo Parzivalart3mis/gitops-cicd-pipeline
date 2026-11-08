@@ -1,5 +1,8 @@
 # patches/env-config.yaml — Production environment config.
 # Warn-level logging reduces log volume and cost in production.
+#
+# git_sha and frontend_version are rewritten by scripts/set-image-tag.sh
+# (promote/rollback workflows) together with the image tags.
 
 apiVersion: v1
 kind: ConfigMap
@@ -8,6 +11,7 @@ metadata:
 data:
   environment: "prod"
   log_level: "warning"
+  git_sha: "unknown"
 
 ---
 apiVersion: v1
@@ -15,4 +19,4 @@ kind: ConfigMap
 metadata:
   name: frontend-config
 data:
-  backend_url: "http://backend.gitops-prod.svc.cluster.local:8000"
+  frontend_version: "unknown"

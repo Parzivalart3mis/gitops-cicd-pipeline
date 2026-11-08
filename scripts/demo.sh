@@ -1,209 +1,180 @@
 #!/usr/bin/env bash
-# scripts/demo.sh — Automated end-to-end demo of the GitOps pipeline.
+# scripts/demo.sh — Interactive end-to-end demo of the GitOps loop, run locally.
 #
-# This script walks through the complete GitOps workflow so a reviewer can
-# see the pipeline in action without needing to understand each component.
+# Shows, on the local Kind cluster:
+#   1. Current state (Argo CD apps, pods, deployed tag)
+#   2. Building a new backend image          (what CI's build job does)
+#   3. Side-loading it into Kind              (stands in for the GHCR push)
+#   4. Bumping the tag with set-image-tag.sh  (what CI's update-manifests job does)
+#   5. Applying it and watching a zero-downtime rolling update
+#   6. Verifying the new version at /healthz
+#   7. Argo CD self-healing the cluster back to what Git declares
 #
-# What it demonstrates:
-#   1. Show current ArgoCD state (healthy, known version)
-#   2. Build a new backend Docker image with a different version tag
-#   3. Load the image into the Kind cluster (no registry push needed)
-#   4. Update the kustomize dev overlay with the new tag
-#   5. Commit the change (simulates what CI does)
-#   6. Wait for ArgoCD to detect and sync the change
-#   7. Curl /healthz to show the new version is live
-#   8. Show Grafana link for metrics
+# The demo never modifies your working tree: the overlay is edited in a temp
+# copy. Because the change isn't pushed to Git, Argo CD would immediately
+# revert it (dev has selfHeal), so the demo pauses dev's auto-sync while the
+# new version runs, then re-enables it in step 7 (and on any exit).
 #
-# Requirements:
-#   - Kind cluster running (make setup)
-#   - ArgoCD application configured
-#   - kubectl configured for the Kind cluster
+# Usage: make demo   (cluster from `make setup` must be running)
 
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# Colour helpers + step printing
-# ---------------------------------------------------------------------------
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; MAGENTA='\033[0;35m'
-BOLD='\033[1m'; NC='\033[0m'
+# shellcheck source=scripts/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-step()    { echo -e "\n${BOLD}${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; echo -e "${BOLD}${CYAN}Step $1: $2${NC}"; echo -e "${BOLD}${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
-info()    { echo -e "${BLUE}  ℹ ${NC} $*"; }
-success() { echo -e "${GREEN}  ✅ ${NC} $*"; }
-warn()    { echo -e "${YELLOW}  ⚠ ${NC} $*"; }
-pause()   { echo -e "\n${YELLOW}  → Press ENTER to continue...${NC}"; read -r; }
-
-CLUSTER_NAME="${CLUSTER_NAME:-gitops-demo}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 NAMESPACE="gitops-dev"
-OWNER="${GITHUB_REPOSITORY_OWNER:-Parzivalart3mis}"
+APP="gitops-demo-dev"
+DEMO_TAG="demo-$(date +%s)"
+IMAGE="${REGISTRY}/gitops-backend:${DEMO_TAG}"
+WORKDIR="$(mktemp -d)"
+PF_PID=""
+AUTOSYNC_PAUSED=false
 
-# Generate a unique demo tag using timestamp
-DEMO_TAG="demo-$(date +%s | tail -c6)"
-OLD_TAG=$(kubectl get deployment backend -n "${NAMESPACE}" \
-  -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | \
-  cut -d: -f2 || echo "unknown")
+section() {
+  echo -e "\n${BOLD}${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BOLD}${CYAN}Step $1: $2${NC}"
+  echo -e "${BOLD}${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+pause() { echo -e "\n${YELLOW}  → Press ENTER to continue...${NC}"; read -r; }
 
-echo ""
-echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║     GitOps CI/CD Pipeline — Live Demo            ║${NC}"
-echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════╝${NC}"
-echo ""
-echo -e "This demo shows the ${BOLD}GitOps reconciliation loop${NC} in action:"
-echo -e "  git push → ArgoCD detects → Kubernetes syncs → New version live"
-echo ""
+have_argocd_app() { kubectl get application "${APP}" -n argocd &>/dev/null; }
+
+pause_autosync() {
+  have_argocd_app || return 0
+  kubectl patch application "${APP}" -n argocd --type merge \
+    -p '{"spec":{"syncPolicy":{"automated":null}}}' >/dev/null
+  AUTOSYNC_PAUSED=true
+}
+
+resume_autosync() {
+  [[ "${AUTOSYNC_PAUSED}" == true ]] || return 0
+  kubectl patch application "${APP}" -n argocd --type merge \
+    -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true,"allowEmpty":false}}}}' >/dev/null
+  AUTOSYNC_PAUSED=false
+}
+
+cleanup() {
+  [[ -n "${PF_PID}" ]] && kill "${PF_PID}" 2>/dev/null || true
+  if [[ "${AUTOSYNC_PAUSED}" == true ]]; then
+    warn "Re-enabling Argo CD auto-sync for ${APP} (Git state will be restored)"
+    resume_autosync || warn "Could not re-enable auto-sync; run: kubectl apply -f argocd/applications/dev.yaml"
+  fi
+  rm -rf "${WORKDIR}"
+}
+trap cleanup EXIT
+
+for cmd in docker kind kubectl kustomize curl; do
+  command -v "${cmd}" &>/dev/null || error "${cmd} is required for the demo"
+done
+kubectl get namespace "${NAMESPACE}" &>/dev/null \
+  || error "Namespace ${NAMESPACE} not found. Run 'make setup' and wait for Argo CD to sync dev."
+
+echo -e "${BOLD}${CYAN}GitOps CI/CD Pipeline — Live Demo${NC}"
+echo "Demo image tag: ${DEMO_TAG}"
 pause
 
 # ---------------------------------------------------------------------------
-# Step 1: Show current state
+section 1 "Current Argo CD and cluster state"
 # ---------------------------------------------------------------------------
-step "1" "Show current ArgoCD and cluster state"
-
-info "ArgoCD applications:"
-kubectl get applications -n argocd 2>/dev/null | head -20 || warn "ArgoCD not reachable"
-
-info "Current pods in ${NAMESPACE}:"
-kubectl get pods -n "${NAMESPACE}" 2>/dev/null || warn "Namespace may not exist yet"
-
-info "Current image tag in dev overlay: ${OLD_TAG}"
-
+info "Argo CD applications:"
+kubectl get applications -n argocd 2>/dev/null || warn "Argo CD not reachable"
+info "Pods in ${NAMESPACE}:"
+kubectl get pods -n "${NAMESPACE}"
+OLD_IMAGE=$(kubectl get deployment backend -n "${NAMESPACE}" \
+  -o jsonpath='{.spec.template.spec.containers[0].image}')
+info "Backend image currently deployed: ${OLD_IMAGE}"
 pause
 
 # ---------------------------------------------------------------------------
-# Step 2: Build a new Docker image
+section 2 "Build a new backend image (CI: build-and-push)"
 # ---------------------------------------------------------------------------
-step "2" "Build a new Docker image (simulates: developer pushes code → CI builds image)"
-
-info "Building backend image with tag: ${DEMO_TAG}"
-info "In production, the CI pipeline does this automatically on every push to main."
-
-cd "${REPO_ROOT}/apps/backend"
-docker build -f Dockerfile \
+info "docker build → ${IMAGE}"
+docker build -f "${REPO_ROOT}/apps/backend/Dockerfile" \
   --build-arg GIT_SHA="${DEMO_TAG}" \
-  -t "ghcr.io/${OWNER}/gitops-backend:${DEMO_TAG}" \
-  . 2>&1 | tail -5
-
-success "Image built: ghcr.io/${OWNER}/gitops-backend:${DEMO_TAG}"
+  -t "${IMAGE}" \
+  "${REPO_ROOT}/apps/backend" 2>&1 | tail -5
+success "Image built"
 pause
 
 # ---------------------------------------------------------------------------
-# Step 3: Load image into Kind
+section 3 "Load the image into Kind (stands in for pushing to GHCR)"
 # ---------------------------------------------------------------------------
-step "3" "Load image into Kind cluster (skips registry push for local demo)"
-
-info "In production, the CI pipeline pushes to GHCR and ArgoCD pulls from there."
-info "Locally, we load the image directly into Kind's docker registry."
-
-kind load docker-image \
-  "ghcr.io/${OWNER}/gitops-backend:${DEMO_TAG}" \
-  --name "${CLUSTER_NAME}"
-
-success "Image loaded into Kind cluster"
+info "Deployments use imagePullPolicy: IfNotPresent (tags are immutable),"
+info "so the kubelet uses this side-loaded image instead of pulling from GHCR."
+kind load docker-image "${IMAGE}" --name "${CLUSTER_NAME}"
+success "Image loaded into every Kind node"
 pause
 
 # ---------------------------------------------------------------------------
-# Step 4: Update kustomize overlay (simulates: CI's update-manifests job)
+section 4 "Bump the dev overlay (CI: update-manifests)"
 # ---------------------------------------------------------------------------
-step "4" "Update dev overlay with new image tag (simulates: CI's 'update-manifests' job)"
-
-info "The CI pipeline's final job runs: kustomize edit set image ..."
-info "This is what triggers the GitOps loop — ArgoCD watches for this commit."
-
-cd "${REPO_ROOT}/k8s/overlays/dev"
-kustomize edit set image \
-  "ghcr.io/${OWNER}/gitops-backend=ghcr.io/${OWNER}/gitops-backend:${DEMO_TAG}"
-
-success "kustomization.yaml updated with tag: ${DEMO_TAG}"
-info "Git diff:"
-cd "${REPO_ROOT}"
-git diff --no-color k8s/overlays/dev/kustomization.yaml 2>/dev/null | head -20 || true
+cp -R "${REPO_ROOT}/k8s" "${WORKDIR}/k8s"
+info "CI runs scripts/set-image-tag.sh, which updates the image tag AND the"
+info "git_sha that /healthz reports, in one commit. Here, on a temp copy:"
+"${REPO_ROOT}/scripts/set-image-tag.sh" "${WORKDIR}/k8s/overlays/dev" "${DEMO_TAG}" backend
+echo ""
+diff -u "${REPO_ROOT}/k8s/overlays/dev/kustomization.yaml" "${WORKDIR}/k8s/overlays/dev/kustomization.yaml" || true
+diff -u "${REPO_ROOT}/k8s/overlays/dev/patches/env-config.yaml" "${WORKDIR}/k8s/overlays/dev/patches/env-config.yaml" || true
+info "In the real pipeline this diff is committed and pushed; Argo CD picks it up."
 pause
 
 # ---------------------------------------------------------------------------
-# Step 5: Commit the change
+section 5 "Apply and watch the rolling update (maxUnavailable: 0)"
 # ---------------------------------------------------------------------------
-step "5" "Commit the manifest change (this is the GitOps trigger)"
-
-info "In production this commit is pushed to GitHub and ArgoCD detects it."
-info "For this demo, we apply the manifests directly to show the rollout."
-
-cd "${REPO_ROOT}"
-git add k8s/overlays/dev/kustomization.yaml 2>/dev/null || true
-
-info "Applying manifests directly (bypassing git push for local demo):"
-kustomize build k8s/overlays/dev | kubectl apply -f - 2>/dev/null || true
-
-success "Manifests applied"
-pause
-
-# ---------------------------------------------------------------------------
-# Step 6: Watch the rollout
-# ---------------------------------------------------------------------------
-step "6" "Watch Kubernetes rolling update (zero-downtime: maxUnavailable=0)"
-
-info "Kubernetes is doing a rolling update. Old pods stay alive until new ones are healthy."
-info "This is because we set strategy.rollingUpdate.maxUnavailable: 0 in the deployment."
-
-kubectl rollout status deployment/backend -n "${NAMESPACE}" --timeout=120s || \
-  warn "Rollout didn't complete in 120s — check pod events"
-
-info "New pods:"
+if have_argocd_app; then
+  info "Pausing Argo CD auto-sync for dev: this change isn't in Git, so"
+  info "self-heal would revert it within seconds. (Restored in step 7.)"
+  pause_autosync
+fi
+kustomize build "${WORKDIR}/k8s/overlays/dev" | kubectl apply -f - >/dev/null
+info "Old pods keep serving until the new pod passes its readiness probe..."
+kubectl rollout status deployment/backend -n "${NAMESPACE}" --timeout=180s
 kubectl get pods -n "${NAMESPACE}" -l app=backend
-
 pause
 
 # ---------------------------------------------------------------------------
-# Step 7: Verify new version is live
+section 6 "Verify the new version at /healthz"
 # ---------------------------------------------------------------------------
-step "7" "Verify new version at /healthz"
-
-info "Port-forwarding backend to localhost:9999..."
-kubectl port-forward svc/backend -n "${NAMESPACE}" 9999:8000 &>/tmp/pf-demo.log &
+kubectl port-forward svc/backend -n "${NAMESPACE}" 9999:8000 >/dev/null 2>&1 &
 PF_PID=$!
 sleep 3
-
-info "Calling GET /healthz to verify deployed version:"
-RESPONSE=$(curl -s http://localhost:9999/healthz 2>/dev/null || echo '{"error":"backend not reachable"}')
-echo -e "\n  ${CYAN}Response: ${NC}${RESPONSE}\n"
-
-# Cleanup port-forward
-kill $PF_PID 2>/dev/null || true
-
-if echo "${RESPONSE}" | grep -q "${DEMO_TAG}"; then
-  success "Version '${DEMO_TAG}' is live! The GitOps loop worked."
+RESPONSE=$(curl -s http://localhost:9999/healthz || echo '{"error":"backend not reachable"}')
+kill "${PF_PID}" 2>/dev/null || true
+PF_PID=""
+echo "  GET /healthz → ${RESPONSE}"
+if grep -q "\"${DEMO_TAG}\"" <<< "${RESPONSE}"; then
+  success "Version ${DEMO_TAG} is live."
 else
-  warn "Version string may differ (image pulled from cache). Check the response above."
+  warn "Expected version ${DEMO_TAG} — check: kubectl describe deployment/backend -n ${NAMESPACE}"
 fi
-
 pause
 
 # ---------------------------------------------------------------------------
-# Step 8: Summary + links
+section 7 "Drift correction: Argo CD restores what Git declares"
 # ---------------------------------------------------------------------------
-step "8" "Summary"
+if have_argocd_app; then
+  info "The cluster now differs from Git (drift). Re-enabling auto-sync:"
+  resume_autosync
+  info "Argo CD detects the drift and rolls back to ${OLD_IMAGE}..."
+  for _ in $(seq 1 60); do
+    current=$(kubectl get deployment backend -n "${NAMESPACE}" \
+      -o jsonpath='{.spec.template.spec.containers[0].image}')
+    [[ "${current}" == "${OLD_IMAGE}" ]] && break
+    sleep 3
+  done
+  kubectl rollout status deployment/backend -n "${NAMESPACE}" --timeout=180s
+  success "Back on ${OLD_IMAGE} — Git is the source of truth."
+else
+  warn "No Argo CD application found; restore Git state with: kustomize build k8s/overlays/dev | kubectl apply -f -"
+fi
 
-echo ""
-echo -e "${BOLD}What just happened:${NC}"
-echo "  1. We built a new Docker image tagged ${DEMO_TAG}"
-echo "  2. We updated k8s/overlays/dev/kustomization.yaml (simulating CI)"
-echo "  3. Kubernetes performed a zero-downtime rolling update"
-echo "  4. /healthz confirmed the new version is running"
-echo ""
-echo -e "${BOLD}In a real pipeline:${NC}"
-echo "  → Developer pushes code to GitHub"
-echo "  → GitHub Actions runs lint + test + build + push + update-manifests"
-echo "  → ArgoCD detects the manifest change in Git"
-echo "  → ArgoCD syncs the Kubernetes cluster"
-echo "  → Same result, fully automated, auditable, rollback-able via git revert"
-echo ""
-echo -e "${BOLD}Explore further:${NC}"
-echo "  ArgoCD UI:  http://localhost:30080"
-echo "  Grafana:    http://localhost:30300"
-echo "  API docs:   http://localhost:9999/docs  (after: make port-forward)"
-echo ""
-echo -e "  ${BOLD}Promote to staging:${NC}  make promote"
-echo -e "  ${BOLD}Rollback:${NC}            make rollback"
-echo ""
+# ---------------------------------------------------------------------------
+section 8 "Summary"
+# ---------------------------------------------------------------------------
 success "Demo complete!"
+echo ""
+echo "  You saw: build → load → set-image-tag (tag + git_sha) → rolling update"
+echo "           → verified /healthz → Argo CD reverted the un-committed drift."
+echo ""
+echo "  The real loop: push to master → CI builds & pushes to GHCR → CI commits"
+echo "  the new tag to k8s/overlays/dev → Argo CD syncs dev automatically."

@@ -1,14 +1,16 @@
 # overlays/prod/kustomization.yaml — Production environment overlay.
 #
 # Production has the strictest configuration:
-#   - 3 replicas for high availability
-#   - Higher resource limits
+#   - 3 replicas (HPA 3–6) for high availability
+#   - Higher resource limits, and a ResourceQuota sized to fit them
 #   - Warn-level logging (avoid verbose output in prod)
 #   - ArgoCD manual sync only (requires human approval)
-#   - PDB minAvailable: 2 (patched below)
+#   - PDB minAvailable: 2 (patched below; always < HPA minReplicas)
 #
 # The OPA Gatekeeper "block-latest-tag" policy prevents :latest from ever
-# being deployed here — all prod images must use an explicit SHA tag.
+# being deployed here — all prod images must use an explicit SHA tag, set by
+# promote.yml (staging → prod). The `latest` below is only the pre-promotion
+# placeholder and is rejected at admission.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -16,19 +18,41 @@ kind: Kustomization
 namespace: gitops-prod
 
 resources:
-  - ../../base
+- ../../base
 
+# pdb-prod tightens the PDBs for HA; resource-quota raises the namespace quota
+# because the base one cannot hold prod's sizing. The inline JSON patches set
+# the per-environment Ingress hosts. (Keep comments out of the lists below:
+# `kustomize edit`, which the promote/rollback workflows run, drops them.)
 patches:
-  - path: patches/replica-count.yaml
-  - path: patches/resource-limits.yaml
-  - path: patches/env-config.yaml
-  - path: patches/pdb-prod.yaml  # tighten PDB for prod HA
+- path: patches/replica-count.yaml
+- path: patches/resource-limits.yaml
+- path: patches/env-config.yaml
+- path: patches/pdb-prod.yaml
+- path: patches/hpa.yaml
+- path: patches/resource-quota.yaml
+- patch: |-
+    - op: replace
+      path: /spec/rules/0/host
+      value: prod.gitops.local
+  target:
+    kind: Ingress
+    name: frontend
+- patch: |-
+    - op: replace
+      path: /spec/rules/0/host
+      value: api.prod.gitops.local
+  target:
+    kind: Ingress
+    name: backend
 
 images:
-  - name: ghcr.io/Parzivalart3mis/gitops-backend
-    newTag: latest  # promote.yml workflow sets a real SHA here (never :latest in prod)
-  - name: ghcr.io/Parzivalart3mis/gitops-frontend
-    newTag: latest
+- name: ghcr.io/parzivalart3mis/gitops-backend
+  newTag: latest
+- name: ghcr.io/parzivalart3mis/gitops-frontend
+  newTag: latest
 
-commonLabels:
-  environment: prod
+labels:
+- includeTemplates: true
+  pairs:
+    environment: prod

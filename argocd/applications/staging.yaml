@@ -21,7 +21,7 @@ spec:
 
   source:
     repoURL: https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git
-    targetRevision: main
+    targetRevision: master  # the repo's default branch; CI commits deploys here
     path: k8s/overlays/staging
 
   destination:
@@ -34,6 +34,7 @@ spec:
       - CreateNamespace=true
       - PrunePropagationPolicy=foreground
       - PruneLast=true
+      - RespectIgnoreDifferences=true  # don't reset HPA-managed replicas on sync
     retry:
       limit: 3
       backoff:

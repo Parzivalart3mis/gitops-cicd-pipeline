@@ -1,49 +1,6 @@
-# security/opa-gatekeeper/constraints/block-latest-tag.yaml
-# OPA Gatekeeper constraint: block deployments using the :latest image tag.
-#
-# Why: The :latest tag is mutable — it can point to different images at
-# different times. Using :latest in production means you cannot be certain
-# which code is running, making rollbacks and audits unreliable.
-#
-# This constraint is applied only to staging and prod namespaces.
-# Dev is allowed to use :latest for fast iteration.
+# security/opa-gatekeeper/constraints/block-latest-tag.yaml — Constraint (where the policy applies).
+# The Rego policy itself is the ConstraintTemplate in ../templates/block-latest-tag.yaml.
 
-apiVersion: templates.gatekeeper.sh/v1
-kind: ConstraintTemplate
-metadata:
-  name: k8sblocklatestimage
-  labels:
-    team: platform
-    app.kubernetes.io/component: opa-policy
-spec:
-  crd:
-    spec:
-      names:
-        kind: K8sBlockLatestImage
-  targets:
-    - target: admission.k8s.gatekeeper.sh
-      rego: |
-        package k8sblocklatestimage
-
-        violation[{"msg": msg}] {
-          container := input.review.object.spec.template.spec.containers[_]
-          endswith(container.image, ":latest")
-          msg := sprintf(
-            "Container '%v' uses the ':latest' image tag which is not allowed in this environment. Use an explicit tag (e.g., a git SHA).",
-            [container.name]
-          )
-        }
-
-        violation[{"msg": msg}] {
-          container := input.review.object.spec.template.spec.containers[_]
-          not contains(container.image, ":")
-          msg := sprintf(
-            "Container '%v' does not specify an image tag. Use an explicit tag (e.g., :a1b2c3d).",
-            [container.name]
-          )
-        }
-
----
 apiVersion: constraints.gatekeeper.sh/v1beta1
 kind: K8sBlockLatestImage
 metadata:

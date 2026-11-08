@@ -5,8 +5,8 @@ Using Pydantic v2 models (bundled with FastAPI ≥ 0.100) for automatic
 request validation, serialisation, and OpenAPI schema generation.
 """
 
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
-from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,6 @@ class ItemBase(BaseModel):
 
 class ItemCreate(ItemBase):
     """Schema accepted on POST /api/v1/items."""
-    pass
 
 
 class Item(ItemBase):
@@ -29,7 +28,7 @@ class Item(ItemBase):
 
     id: UUID = Field(default_factory=uuid4, description="Unique item identifier (UUID v4)")
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="ISO-8601 creation timestamp (UTC)",
     )
 

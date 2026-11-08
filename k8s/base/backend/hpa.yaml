@@ -4,8 +4,12 @@
 # Target of 70% means: if average CPU across all pods exceeds 70% of their
 # CPU *request*, the HPA adds more pods (up to maxReplicas).
 #
-# Note: minReplicas is overridden per environment via overlay patches so
-# prod can start at 3 and dev at 1.
+# minReplicas/maxReplicas here are the dev-sized defaults; staging and prod
+# override them in their overlay's patches/hpa.yaml. Each environment's
+# ResourceQuota is sized for maxReplicas + 1 surge pod per Deployment.
+#
+# Requires metrics-server (scripts/setup-cluster.sh installs it on Kind).
+# ArgoCD ignores Deployment spec.replicas so it doesn't fight the HPA.
 
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -20,8 +24,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: backend
-  minReplicas: 1  # overridden per environment
-  maxReplicas: 10
+  minReplicas: 1  # overridden in staging/prod overlays
+  maxReplicas: 3
   metrics:
     - type: Resource
       resource:

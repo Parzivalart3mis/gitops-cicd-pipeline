@@ -6,11 +6,11 @@ graph LR
     B --> C{Tests Pass?}
     C -->|No| D[❌ Pipeline Failed\nNotify Developer]
     C -->|Yes| E[Build Docker Image\nmulti-stage Dockerfile]
-    E --> F[Security Scan\nTrivy + kubesec]
+    E --> F[Security Scan\nTrivy + pip-audit + kubesec]
     F --> G{Vulnerabilities?}
     G -->|CRITICAL| D
-    G -->|Clean| H[Push to GHCR\nghcr.io/Parzivalart3mis/image:SHA]
-    H --> I[Update k8s/overlays/dev\nkustomize edit set image]
+    G -->|Clean| H[Push to GHCR\nghcr.io/parzivalart3mis/image:SHA]
+    H --> I[Update k8s/overlays/dev\nset-image-tag.sh: tag + git_sha]
     I --> J[Git Commit\nchore: update dev images to SHA]
     J --> K[ArgoCD Detects\nPolls Git every 3 min]
     K --> L[Diff: Desired vs Actual]

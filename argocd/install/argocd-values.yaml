@@ -1,38 +1,36 @@
-# argocd/install/argocd-values.yaml — Custom Helm values for ArgoCD.
+# argocd/install/argocd-values.yaml — Helm values for the Argo CD chart.
 #
-# Install ArgoCD with these values:
-#   helm repo add argo https://argoproj.github.io/argo-helm
-#   helm install argocd argo/argo-cd \
-#     --namespace argocd --create-namespace \
-#     --values argocd/install/argocd-values.yaml
+# Chart: argo/argo-cd, version pinned in scripts/versions.env
+# (ARGOCD_CHART_VERSION). Re-check these keys whenever that pin changes:
+# chart 5.x moved server.config → configs.cm and server.insecure →
+# configs.params, and the old keys are silently ignored.
+#
+# Install: scripts/install-argocd.sh (called by `make setup`).
 
 global:
-  # Match labels required by OPA policies
   additionalLabels:
     team: platform
     app.kubernetes.io/part-of: gitops-demo
 
+configs:
+  # argocd-cm
+  cm:
+    # External URL of the UI (Kind maps NodePort 30080 to the host).
+    url: http://localhost:30080
+    # No repositories entry: the repo is public, so Argo CD needs no
+    # credentials for it.
+
+  # argocd-cmd-params-cm
+  params:
+    # Serve plain HTTP: local demo with no TLS-terminating proxy in front.
+    # Without this, http://localhost:30080 just redirects to HTTPS.
+    server.insecure: true
+
 server:
-  # Expose the ArgoCD UI via NodePort for local Kind cluster access.
-  # In a cloud environment, use service.type: LoadBalancer or an Ingress.
   service:
     type: NodePort
     nodePortHttp: 30080
     nodePortHttps: 30443
-
-  # Disable TLS on the server so we can access the UI over plain HTTP locally.
-  # In production: enable TLS and configure a proper certificate.
-  insecure: true
-
-  config:
-    # URL that ArgoCD uses to build deep-links (e.g., in Slack notifications)
-    url: http://localhost:30080
-
-    # Repository credentials — add your GitHub PAT here for private repos
-    repositories: |
-      - url: https://github.com/Parzivalart3mis/gitops-cicd-pipeline.git
-
-  # Resource requests/limits for the ArgoCD server pod
   resources:
     requests:
       cpu: 100m
@@ -40,6 +38,15 @@ server:
     limits:
       cpu: 500m
       memory: 256Mi
+
+controller:
+  # Exposes argocd_app_info, used by the ArgoCDAppOutOfSync alert.
+  # install-argocd.sh enables the ServiceMonitor when the Prometheus
+  # Operator CRDs are present (they are after install-observability.sh).
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: false
 
 applicationSet:
   resources:
@@ -68,7 +75,6 @@ redis:
       cpu: 200m
       memory: 128Mi
 
-# Argo CD Notifications controller — enables Slack/email alerts on sync events
 notifications:
   enabled: true
   resources:

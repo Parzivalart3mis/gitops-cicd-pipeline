@@ -1,11 +1,11 @@
 # security/sealed-secrets/controller-values.yaml
 # Helm values for the Bitnami Sealed Secrets controller.
 #
-# Install:
-#   helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
-#   helm install sealed-secrets sealed-secrets/sealed-secrets \
-#     --namespace kube-system \
-#     --values security/sealed-secrets/controller-values.yaml
+# Chart: sealed-secrets from https://bitnami.github.io/sealed-secrets (the old
+# bitnami-labs.github.io URL now returns 404). Version pinned in
+# scripts/versions.env as SEALED_SECRETS_CHART_VERSION.
+#
+# Install: scripts/setup-cluster.sh. Create secrets with `make seal-secret`.
 #
 # How Sealed Secrets works:
 #   1. You create a regular Kubernetes Secret locally.
@@ -16,6 +16,10 @@
 #
 # This is simpler than HashiCorp Vault for a portfolio demo while demonstrating
 # the correct principle: never commit plaintext secrets to Git.
+
+# kubeseal looks for a controller named sealed-secrets-controller in
+# kube-system by default; naming it that way keeps kubeseal flag-free.
+fullnameOverride: sealed-secrets-controller
 
 resources:
   requests:

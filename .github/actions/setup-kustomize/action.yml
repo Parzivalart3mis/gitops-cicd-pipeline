@@ -1,0 +1,27 @@
+# .github/actions/setup-kustomize — install a pinned, checksum-verified kustomize.
+#
+# Replaces `curl …/kustomize/master/hack/install_kustomize.sh | bash`, which
+# executed whatever was on kustomize's master branch and installed whatever
+# release was newest at the time. To upgrade, change both values below
+# (the checksum is in the release's checksums.txt).
+
+name: Set up kustomize
+description: Install a pinned kustomize release after verifying its SHA-256.
+
+runs:
+  using: composite
+  steps:
+    - name: Install kustomize
+      shell: bash
+      env:
+        KUSTOMIZE_VERSION: "5.8.3"
+        KUSTOMIZE_SHA256: "cb9e31198d3f63b44848bd0afc4c8efc56e6cfef9c93a4a39a211940e6decd61"
+      run: |
+        set -euo pipefail
+        tarball="kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+        curl -fsSL -o "${RUNNER_TEMP}/${tarball}" \
+          "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/${tarball}"
+        echo "${KUSTOMIZE_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum --check --strict -
+        tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" kustomize
+        sudo install -m 0755 "${RUNNER_TEMP}/kustomize" /usr/local/bin/kustomize
+        kustomize version

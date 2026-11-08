@@ -1,4 +1,7 @@
 # frontend/ingress.yaml — Ingress rule for the frontend.
+#
+# The host is a placeholder: every overlay patches spec.rules[0].host
+# (<env>.gitops.local) so the environments don't collide.
 
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -13,7 +16,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: gitops.local  # overridden by overlay
+    - host: gitops.local  # replaced by each overlay
       http:
         paths:
           - path: /

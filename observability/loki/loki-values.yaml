@@ -1,67 +1,72 @@
-# observability/loki/loki-values.yaml
-# Helm values for Grafana Loki (log aggregation) + Promtail (log shipping).
+# observability/loki/loki-values.yaml — Loki log store (single-binary, local storage).
 #
-# Install:
-#   helm repo add grafana https://grafana.github.io/helm-charts
-#   helm install loki grafana/loki-stack \
-#     --namespace monitoring --create-namespace \
-#     --values observability/loki/loki-values.yaml
+# Chart: grafana-community/loki (version pinned in scripts/versions.env as
+# LOKI_CHART_VERSION). The OSS Loki chart moved from grafana/helm-charts to
+# grafana-community/helm-charts in March 2026.
 #
-# Loki stores logs from all pods and makes them queryable from Grafana.
-# Our backend uses structured JSON logging (structlog), which Loki can
-# parse and filter by field.
+# Monolithic mode runs all Loki components in one pod: right-sized for a
+# Kind cluster (small volume, no HA). Logs are written to a PVC on the
+# default local-path StorageClass and kept for 3 days.
+#
+# Logs are shipped by Grafana Alloy (alloy-values.yaml) and queried from
+# Grafana via the "Loki" datasource (grafana-values.yaml), e.g.:
+#   {namespace="gitops-prod", app="backend"} | json | level="error"
+#
+# Install: scripts/install-observability.sh.
+
+deploymentMode: Monolithic
 
 loki:
-  enabled: true
+  auth_enabled: false            # single tenant; no X-Scope-OrgID needed
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+  limits_config:
+    retention_period: 72h
+  compactor:
+    retention_enabled: true
+    delete_request_store: filesystem
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 5Gi
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: 500m
       memory: 512Mi
-  persistence:
-    enabled: false  # local dev: use memory; enable for production
-  config:
-    schema_config:
-      configs:
-        - from: 2024-01-01
-          store: boltdb-shipper
-          object_store: filesystem
-          schema: v11
-          index:
-            prefix: index_
-            period: 24h
-    storage_config:
-      boltdb_shipper:
-        active_index_directory: /data/loki/boltdb-shipper-active
-        cache_location: /data/loki/boltdb-shipper-cache
-        shared_store: filesystem
-      filesystem:
-        directory: /data/loki/chunks
 
-promtail:
-  enabled: true
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 128Mi
-  config:
-    snippets:
-      # Parse JSON logs from our backend for structured querying in Grafana
-      pipelineStages:
-        - json:
-            expressions:
-              level: level
-              logger: logger
-              timestamp: timestamp
-              event: event
-        - labels:
-            level:
-            logger:
+# Scalable-mode targets: unused in Monolithic mode.
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
 
-grafana:
-  enabled: false  # Grafana is installed separately
+# Not needed for a single-tenant local install: Alloy and Grafana talk to the
+# Loki service directly, and memcached caches would only add pods.
+gateway:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false

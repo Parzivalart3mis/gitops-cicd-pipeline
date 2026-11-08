@@ -23,10 +23,12 @@ Uses the `rollback.yml` GitHub Actions workflow. This is the **preferred method*
 5. Click Run
 
 The workflow:
-1. Updates `k8s/overlays/<env>/kustomization.yaml` with the old tag
-2. Commits: `chore(rollback): <env> → <tag> reason: <reason>`
-3. Pushes to main
+1. Validates that `target_tag` is a git SHA and that both images exist in GHCR
+2. Runs `scripts/set-image-tag.sh` on `k8s/overlays/<env>/` (image tags plus the `git_sha` that `/healthz` reports)
+3. Commits `chore(rollback): <env> → <tag>` (previous tag and reason in the body) and pushes to `master`
 4. Creates a GitHub Issue documenting the incident
+
+There is deliberately no approval gate on rollbacks, and the prod weekend sync window allows manual syncs, so nothing blocks an emergency rollback.
 
 For **dev** (auto-sync ON): ArgoCD detects the commit within ~3 minutes and syncs automatically.
 For **staging/prod** (manual sync): Run `argocd app sync gitops-demo-<env>` or use the ArgoCD UI.
@@ -60,10 +62,10 @@ git log --oneline k8s/overlays/prod/kustomization.yaml
 
 # Revert it
 git revert <commit-sha>
-git push origin main
+git push origin master
 ```
 
-ArgoCD will detect the new commit and sync the reverted version.
+ArgoCD auto-syncs dev; for staging/prod, sync manually after the revert.
 
 ## Verifying a Rollback
 
@@ -71,8 +73,8 @@ ArgoCD will detect the new commit and sync the reverted version.
 # Check pod rollout status
 kubectl rollout status deployment/backend -n gitops-prod
 
-# Confirm the version via health endpoint
-curl http://backend.gitops.local/healthz | jq '{version, environment}'
+# Confirm the version via health endpoint (hosts from `make hosts`)
+curl http://api.prod.gitops.local/healthz | jq '{version, environment}'
 
 # Check ArgoCD sync status
 argocd app get gitops-demo-prod

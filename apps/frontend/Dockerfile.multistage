@@ -1,64 +1,59 @@
+# syntax=docker/dockerfile:1
+#
 # Dockerfile.multistage — optimised multi-stage build for the frontend.
+# This is the Dockerfile CI's build-and-push job uses.
 #
-# Stage 1 (build): installs Node.js and builds the static assets.
-#   Even though this project uses plain HTML (no bundler), having a build
-#   stage makes it trivial to swap in Vite/React/Vue later without changing
-#   the pipeline.
+# Stage 1 (build): Node.js stage for static asset builds. This project uses
+#   plain HTML (no bundler), so it just passes files through, but having the
+#   stage means Vite/React/Vue can be swapped in without touching the pipeline.
 #
-# Stage 2 (production): copies only the compiled static files into a minimal
-#   Nginx Alpine image. The resulting image is ~25 MB vs ~200 MB with Node.
+# Stage 2 (production): copies only the built static files into a minimal,
+#   non-root Nginx Alpine image.
 
 # ---------------------------------------------------------------------------
-# Stage 1 — build (currently a no-op for plain HTML; extend for React/Vite)
+# Stage 1 — build (currently a pass-through for plain HTML)
 # ---------------------------------------------------------------------------
-FROM node:20.15.0-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /build
 
-# FRONTEND_VERSION is passed as a build arg by the CI pipeline so the version
-# displayed in the UI matches the git SHA of the image being built.
-ARG FRONTEND_VERSION=unknown
-ENV FRONTEND_VERSION=${FRONTEND_VERSION}
-
-# Copy source files (extend this section for a real bundler setup).
 COPY src/ ./src/
 
 # For a React/Vite project this would be:
 #   RUN npm ci && npm run build
-# For our plain HTML project we just pass the files through.
 RUN cp -r src/ dist/
 
 # ---------------------------------------------------------------------------
 # Stage 2 — production Nginx image
 # ---------------------------------------------------------------------------
-FROM nginx:1.27-alpine AS production
+FROM nginx:1.30-alpine AS production
 
 LABEL org.opencontainers.image.source="https://github.com/Parzivalart3mis/gitops-cicd-pipeline"
 LABEL org.opencontainers.image.description="GitOps demo frontend (production)"
 LABEL org.opencontainers.image.licenses="MIT"
 
-ARG FRONTEND_VERSION=unknown
-
 # Upgrade Alpine packages to pull the latest security patches at build time.
-RUN apk upgrade --no-cache
+RUN apk upgrade --no-cache \
+    && rm /etc/nginx/conf.d/default.conf \
+    && mkdir -p /etc/nginx/snippets
 
-RUN rm /etc/nginx/conf.d/default.conf
-
-COPY nginx.conf         /etc/nginx/nginx.conf
+COPY nginx.conf               /etc/nginx/nginx.conf
 COPY --from=build /build/dist/ /usr/share/nginx/html/
-COPY entrypoint.sh      /entrypoint.sh
+COPY entrypoint.sh            /entrypoint.sh
 
+# The nginx user (UID 101) must be able to write: the HTML (placeholder
+# substitution), the snippets dir (backend proxy), cache, logs and pid file.
 RUN chmod +x /entrypoint.sh \
-    && chown -R nginx:nginx /usr/share/nginx/html \
-    && chown -R nginx:nginx /var/cache/nginx \
-    && chown -R nginx:nginx /var/log/nginx \
+    && chown -R nginx:nginx /usr/share/nginx/html /etc/nginx/snippets /var/cache/nginx /var/log/nginx \
     && touch /tmp/nginx.pid \
     && chown nginx:nginx /tmp/nginx.pid
 
-# Bake the frontend version into the image for introspection.
+# Shown in the UI when the container runs outside Kubernetes; in-cluster the
+# frontend-config ConfigMap sets the value.
+ARG FRONTEND_VERSION=unknown
 ENV FRONTEND_VERSION=${FRONTEND_VERSION}
 
-USER nginx
+USER 101
 
 EXPOSE 8080
 

@@ -20,33 +20,42 @@ spec:
         # ----------------------------------------------------------------
         # Alert: High HTTP error rate (5xx)
         # ----------------------------------------------------------------
+        # Both sides are aggregated to the same label set (namespace) before
+        # dividing. Dividing the raw rate() vectors would only pair series
+        # with identical labels, status included, so each 5xx series was
+        # divided by itself and the ratio was always 1.0 (100 %).
         - alert: HighErrorRate
           expr: |
-            rate(http_requests_total{
-              namespace=~"gitops-.*",
-              status=~"5.."
-            }[5m])
+            sum by (namespace) (
+              rate(http_requests_total{namespace=~"gitops-.*", status=~"5.."}[5m])
+            )
             /
-            rate(http_requests_total{namespace=~"gitops-.*"}[5m])
+            sum by (namespace) (
+              rate(http_requests_total{namespace=~"gitops-.*"}[5m])
+            )
             > 0.05
           for: 5m
           labels:
             severity: critical
             team: platform
           annotations:
-            summary: "High 5xx error rate on {{ $labels.handler }}"
+            summary: "High 5xx error rate in {{ $labels.namespace }}"
             description: >
-              The error rate on {{ $labels.handler }} in {{ $labels.namespace }}
+              The backend 5xx error rate in {{ $labels.namespace }}
               is {{ $value | humanizePercentage }}. Threshold is 5%.
               Check application logs: kubectl logs -l app=backend -n {{ $labels.namespace }}
 
         # ----------------------------------------------------------------
         # Alert: High request latency (p99 > 2s)
         # ----------------------------------------------------------------
+        # Buckets are summed across pods by (le) first; histogram_quantile
+        # over un-aggregated series computes a separate p99 per pod.
         - alert: HighRequestLatency
           expr: |
             histogram_quantile(0.99,
-              rate(http_request_duration_seconds_bucket{namespace=~"gitops-.*"}[5m])
+              sum by (namespace, handler, le) (
+                rate(http_request_duration_seconds_bucket{namespace=~"gitops-.*"}[5m])
+              )
             ) > 2.0
           for: 5m
           labels:

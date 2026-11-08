@@ -1,30 +1,41 @@
 # observability/grafana/grafana-values.yaml
 # Helm values for Grafana.
 #
-# Install:
-#   helm repo add grafana https://grafana.github.io/helm-charts
-#   helm install grafana grafana/grafana \
-#     --namespace monitoring --create-namespace \
-#     --values observability/grafana/grafana-values.yaml
+# Chart: grafana-community/grafana (version pinned in scripts/versions.env as
+# GRAFANA_CHART_VERSION). The grafana/grafana chart is deprecated; the chart
+# now lives in grafana-community/helm-charts.
+#
+# Install: scripts/install-observability.sh, which first creates the
+# `grafana-dashboards` ConfigMap from observability/grafana/dashboards/*.json.
+# That ConfigMap must exist before Grafana starts: the chart mounts it as a
+# required volume, and without it the pod never leaves ContainerCreating.
 
-adminPassword: "gitops-demo-admin"  # CHANGE THIS — use a sealed secret in production
+adminPassword: "gitops-demo-admin"  # local demo only — use a SealedSecret + admin.existingSecret for anything real
 
 service:
   type: NodePort
   nodePort: 30300
 
-# Pre-configure the Prometheus data source
+# Datasources. The uids are fixed because dashboards reference datasources by
+# uid; without them Grafana generates random uids and every dashboard panel
+# reports "datasource not found".
 datasources:
   datasources.yaml:
     apiVersion: 1
     datasources:
       - name: Prometheus
+        uid: prometheus
         type: prometheus
         url: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
         isDefault: true
         access: proxy
+      - name: Loki
+        uid: loki
+        type: loki
+        url: http://loki.monitoring.svc.cluster.local:3100
+        access: proxy
 
-# Auto-provision dashboards from ConfigMaps with the grafana_dashboard label
+# Load dashboards from the ConfigMap created by install-observability.sh.
 dashboardProviders:
   dashboardproviders.yaml:
     apiVersion: 1
@@ -38,7 +49,6 @@ dashboardProviders:
         options:
           path: /var/lib/grafana/dashboards/default
 
-# Load dashboards from the dashboards/ directory
 dashboardsConfigMaps:
   default: grafana-dashboards
 
@@ -50,11 +60,10 @@ resources:
     cpu: 500m
     memory: 256Mi
 
-# Disable unused plugins for a leaner image
 plugins: []
 
-# Enable anonymous access for demo purposes (disable in production)
 grafana.ini:
+  # Allow anonymous read-only access for demo purposes
   auth.anonymous:
     enabled: true
     org_role: Viewer

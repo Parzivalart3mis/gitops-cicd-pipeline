@@ -6,7 +6,7 @@
 # Raw Kubernetes Secrets (use SealedSecrets instead)
 **/secret.yaml
 **/secrets.yaml
-# Only SealedSecret CRDs (sealed-secret.yaml) should be committed.
+# Only SealedSecrets (<name>.sealedsecret.yaml, from `make seal-secret`) belong in Git.
 
 # Environment variables / dotenv files
 .env
@@ -88,7 +88,8 @@ Thumbs.db
 # ---------------------------------------------------------------------------
 trivy-results.sarif
 trivy-results.json
-/tmp/trivy-cache/
+# Trivy cache dir (set in security/trivy/trivy-config.yaml)
+.cache/trivy/
 
 # ---------------------------------------------------------------------------
 # CI artefacts

@@ -1,4 +1,9 @@
 # frontend/deployment.yaml — Kubernetes Deployment for the Nginx frontend.
+#
+# The container's Nginx serves the static UI and reverse-proxies /backend/*
+# to the backend Service (BACKEND_UPSTREAM), so the browser only ever talks
+# to the frontend's own origin. The NetworkPolicy "frontend-allow-ingress"
+# permits exactly that egress (frontend → backend:8000).
 
 apiVersion: apps/v1
 kind: Deployment
@@ -9,7 +14,7 @@ metadata:
     app.kubernetes.io/name: frontend
     app.kubernetes.io/component: web
 spec:
-  replicas: 1  # overridden per environment
+  replicas: 1  # initial value — overlays set it; the HPA owns it afterwards
   revisionHistoryLimit: 5
   selector:
     matchLabels:
@@ -33,17 +38,23 @@ spec:
         fsGroup: 101
         seccompProfile:
           type: RuntimeDefault
+      # Best-effort spread across nodes; see backend/deployment.yaml for why
+      # ScheduleAnyway + nodeTaintsPolicy: Honor + pod-template-hash.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
+          whenUnsatisfiable: ScheduleAnyway
+          nodeTaintsPolicy: Honor
           labelSelector:
             matchLabels:
               app: frontend
+          matchLabelKeys:
+            - pod-template-hash
       containers:
         - name: frontend
-          image: ghcr.io/Parzivalart3mis/gitops-frontend:latest
-          imagePullPolicy: Always
+          # Placeholder — the overlay's images[] entry sets the real tag.
+          image: ghcr.io/parzivalart3mis/gitops-frontend:latest
+          imagePullPolicy: IfNotPresent  # immutable SHA tags; see backend
           ports:
             - name: http
               containerPort: 8080
@@ -54,6 +65,11 @@ spec:
                 configMapKeyRef:
                   name: frontend-config
                   key: backend_url
+            - name: BACKEND_UPSTREAM
+              valueFrom:
+                configMapKeyRef:
+                  name: frontend-config
+                  key: backend_upstream
             - name: FRONTEND_VERSION
               valueFrom:
                 configMapKeyRef:
@@ -61,7 +77,9 @@ spec:
                   key: frontend_version
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false  # Nginx needs to write temp files
+            # The entrypoint rewrites index.html and writes the proxy snippet
+            # at start-up, so the root filesystem stays writable.
+            readOnlyRootFilesystem: false
             capabilities:
               drop:
                 - ALL

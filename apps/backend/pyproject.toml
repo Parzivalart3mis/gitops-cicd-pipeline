@@ -1,0 +1,29 @@
+# Tool configuration for the backend. The project is not packaged; this file
+# only pins lint/type/test/coverage behaviour so it is identical in CI, in
+# `make`, and in the Docker test stage.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+src = ["src"]
+
+[tool.ruff.lint]
+# Explicit rule selection: ruff's defaults change between releases, and an
+# implicit rule set is what let a ruff upgrade break CI without a code change.
+select = ["E", "F", "W", "I", "UP", "B", "PIE"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+
+[tool.coverage.run]
+source = ["src"]
+# Measure application code only; counting the tests themselves inflates the
+# percentage that --cov-fail-under checks.
+omit = ["src/tests/*"]
+
+[tool.coverage.report]
+show_missing = true

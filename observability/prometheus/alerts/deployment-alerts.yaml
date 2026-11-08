@@ -33,7 +33,7 @@ spec:
               Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has restarted
               {{ $value | printf "%.0f" }} times in the last hour.
               This often indicates a crash loop (OOMKill, bad config, failing startup probe).
-            runbook: "https://github.com/Parzivalart3mis/gitops-cicd-pipeline/blob/main/docs/TROUBLESHOOTING.md#high-pod-restart-rate"
+            runbook: "https://github.com/Parzivalart3mis/gitops-cicd-pipeline/blob/master/docs/TROUBLESHOOTING.md#high-pod-restart-rate"
 
         # ----------------------------------------------------------------
         # Alert: Deployment has fewer ready replicas than desired
@@ -52,7 +52,7 @@ spec:
               Deployment {{ $labels.deployment }} in {{ $labels.namespace }} has
               {{ $value }} unavailable replicas. Expected all replicas to be ready within 10 minutes.
               Check: kubectl describe deployment {{ $labels.deployment }} -n {{ $labels.namespace }}
-            runbook: "https://github.com/Parzivalart3mis/gitops-cicd-pipeline/blob/main/docs/TROUBLESHOOTING.md#deployment-replicas-mismatch"
+            runbook: "https://github.com/Parzivalart3mis/gitops-cicd-pipeline/blob/master/docs/TROUBLESHOOTING.md#deployment-replicas-mismatch"
 
         # ----------------------------------------------------------------
         # Alert: Deployment has been progressing too long (stuck rollout)
@@ -96,6 +96,9 @@ spec:
         # ----------------------------------------------------------------
         # Alert: ArgoCD Application out of sync for too long
         # ----------------------------------------------------------------
+        # argocd_app_info comes from the Argo CD application-controller's
+        # metrics endpoint (controller.metrics in argocd-values.yaml), which
+        # install-argocd.sh registers with Prometheus via a ServiceMonitor.
         - alert: ArgoCDAppOutOfSync
           expr: |
             argocd_app_info{sync_status="OutOfSync"} == 1

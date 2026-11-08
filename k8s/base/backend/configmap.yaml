@@ -1,11 +1,13 @@
 # backend/configmap.yaml — Application configuration for the backend.
 #
-# Environment-specific values (environment name, log level) are patched
-# by each Kustomize overlay. Using a ConfigMap instead of raw env vars
-# gives us a single source of truth that's visible in kubectl describe.
+# Environment-specific values (environment name, log level, git SHA) are
+# patched by each overlay's patches/env-config.yaml. Using a ConfigMap instead
+# of raw env vars gives a single source of truth visible in kubectl describe.
 #
-# GIT_SHA is updated here by the CI pipeline's update-manifests job
-# so /healthz can report the exact commit SHA that is running.
+# git_sha: each overlay's env-config patch carries its own git_sha, which
+# scripts/set-image-tag.sh rewrites together with the image tag (CI for dev,
+# promote/rollback workflows for the rest), so /healthz reports the commit
+# that is actually running. The value here is only the fallback.
 
 apiVersion: v1
 kind: ConfigMap
@@ -18,4 +20,4 @@ metadata:
 data:
   environment: "base"       # overridden by overlay patch
   log_level: "info"         # overridden by overlay patch
-  git_sha: "unknown"        # set by CI pipeline's update-manifests job
+  git_sha: "unknown"        # overridden by overlay patch

@@ -1,45 +1,35 @@
 #!/usr/bin/env bash
 # scripts/setup-cluster.sh — One-command local cluster setup.
 #
-# This script creates a Kind cluster and installs all dependencies needed to
-# run the GitOps CI/CD pipeline locally. It is IDEMPOTENT — safe to run
-# multiple times without side effects.
+# Creates a Kind cluster and installs everything needed to run the GitOps
+# CI/CD pipeline locally. It is IDEMPOTENT: safe to run again after a failure.
+# Every component is pinned (scripts/versions.env), so each run installs the
+# same thing.
 #
 # What it does:
 #   1. Checks prerequisites (docker, kubectl, kind, kustomize, helm)
 #   2. Creates a Kind cluster (1 control plane, 2 workers)
-#   3. Installs Nginx Ingress controller
-#   4. Installs ArgoCD via Helm
-#   5. Installs Bitnami Sealed Secrets controller
-#   6. Installs Prometheus + Grafana via Helm
-#   7. Applies OPA Gatekeeper + constraint templates
-#   8. Applies ArgoCD Application CRDs
-#   9. Prints a summary with all URLs, credentials, and next steps
+#   3. Installs the ingress-nginx controller
+#   4. Installs metrics-server (required by the HorizontalPodAutoscalers)
+#   5. Installs the Sealed Secrets controller
+#   6. Installs OPA Gatekeeper, its ConstraintTemplates, then its Constraints
+#   7. Installs the observability stack (install-observability.sh)
+#   8. Installs Argo CD + the AppProject and Applications (install-argocd.sh)
+#   9. Prints URLs, credentials, and the /etc/hosts line for the Ingress hosts
 #
-# Usage:
-#   chmod +x scripts/setup-cluster.sh
-#   ./scripts/setup-cluster.sh
+# Gatekeeper comes before Argo CD on purpose: policies are in force before
+# the first application sync. Observability comes before Argo CD so the
+# Prometheus Operator CRDs exist when Argo CD's ServiceMonitor is created.
+#
+# Usage: make setup   (or ./scripts/setup-cluster.sh)
 
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
-# Colour helpers
-# ---------------------------------------------------------------------------
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-
-info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
-success() { echo -e "${GREEN}[OK]${NC}   $*"; }
-warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
-error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
-step()    { echo -e "\n${BOLD}${CYAN}▶ $*${NC}"; }
-
-CLUSTER_NAME="${CLUSTER_NAME:-gitops-demo}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=scripts/lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 # ---------------------------------------------------------------------------
-# Step 0: Check prerequisites
+# Step 1: Prerequisites
 # ---------------------------------------------------------------------------
 step "Checking prerequisites"
 
@@ -52,26 +42,26 @@ check_cmd() {
   fi
 }
 
-check_cmd docker  "Install Docker: https://docs.docker.com/get-docker/"
-check_cmd kubectl "Install kubectl: https://kubernetes.io/docs/tasks/tools/"
-check_cmd kind    "Install kind: https://kind.sigs.k8s.io/docs/user/quick-start/"
-check_cmd helm    "Install Helm: https://helm.sh/docs/intro/install/"
+check_cmd docker    "Install Docker: https://docs.docker.com/get-docker/"
+check_cmd kubectl   "Install kubectl: https://kubernetes.io/docs/tasks/tools/"
+check_cmd kind      "Install kind: https://kind.sigs.k8s.io/docs/user/quick-start/"
+check_cmd helm      "Install Helm: https://helm.sh/docs/intro/install/"
 check_cmd kustomize "Install kustomize: https://kubectl.docs.kubernetes.io/installation/kustomize/"
 
-# Check Docker is running
 docker info &>/dev/null || error "Docker daemon is not running. Start Docker first."
 
 # ---------------------------------------------------------------------------
-# Step 1: Create Kind cluster
+# Step 2: Kind cluster
 # ---------------------------------------------------------------------------
 step "Creating Kind cluster: ${CLUSTER_NAME}"
 
 if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
   warn "Cluster '${CLUSTER_NAME}' already exists — skipping creation"
 else
+  # extraPortMappings expose the Ingress (80/443) and the Argo CD / Grafana
+  # NodePorts on the host. The control-plane node carries ingress-ready=true,
+  # which the kind flavour of ingress-nginx schedules onto.
   cat <<EOF | kind create cluster --name "${CLUSTER_NAME}" --config=-
-# Kind cluster config: 1 control plane + 2 worker nodes.
-# extraPortMappings expose NodePort services to localhost.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
@@ -91,7 +81,7 @@ nodes:
         protocol: TCP
       - containerPort: 30080
         hostPort: 30080
-        protocol: TCP   # ArgoCD UI
+        protocol: TCP   # Argo CD UI
       - containerPort: 30300
         hostPort: 30300
         protocol: TCP   # Grafana UI
@@ -101,171 +91,115 @@ EOF
   success "Kind cluster created"
 fi
 
+kubectl config use-context "kind-${CLUSTER_NAME}" >/dev/null
 kubectl cluster-info --context "kind-${CLUSTER_NAME}"
 
 # ---------------------------------------------------------------------------
-# Step 2: Install Nginx Ingress Controller
+# Step 3: ingress-nginx (pinned release manifest for Kind)
 # ---------------------------------------------------------------------------
-step "Installing Nginx Ingress Controller"
+step "Installing ingress-nginx ${INGRESS_NGINX_VERSION}"
 
 kubectl apply -f \
-  "https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml" \
-  --dry-run=client 2>/dev/null || true
+  "https://raw.githubusercontent.com/kubernetes/ingress-nginx/${INGRESS_NGINX_VERSION}/deploy/static/provider/kind/deploy.yaml"
 
-kubectl apply -f \
-  "https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml"
-
-info "Waiting for Nginx Ingress to be ready (up to 60s)..."
+info "Waiting for the ingress controller to be ready..."
+# The controller's admission webhook rejects Ingress objects while it is
+# down, so the application syncs depend on this.
 kubectl wait --namespace ingress-nginx \
   --for=condition=ready pod \
   --selector=app.kubernetes.io/component=controller \
-  --timeout=60s || warn "Ingress controller may not be ready yet — continue anyway"
-
-success "Nginx Ingress Controller installed"
-
-# ---------------------------------------------------------------------------
-# Step 3: Install ArgoCD
-# ---------------------------------------------------------------------------
-step "Installing ArgoCD"
-
-helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
-helm repo update argo 2>/dev/null || true
-
-kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
-
-helm upgrade --install argocd argo/argo-cd \
-  --namespace argocd \
-  --values "${REPO_ROOT}/argocd/install/argocd-values.yaml" \
-  --wait \
-  --timeout 300s
-
-success "ArgoCD installed"
-info "ArgoCD UI: http://localhost:30080"
-info "ArgoCD admin password: $(kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath="{.data.password}" | base64 -d 2>/dev/null || echo '<run: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d>')"
+  --timeout=180s
+success "ingress-nginx ready"
 
 # ---------------------------------------------------------------------------
-# Step 4: Install Sealed Secrets
+# Step 4: metrics-server (HPAs have no CPU/memory metrics without it)
 # ---------------------------------------------------------------------------
-step "Installing Sealed Secrets controller"
+step "Installing metrics-server ${METRICS_SERVER_CHART_VERSION}"
 
-helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets 2>/dev/null || true
-helm repo update sealed-secrets 2>/dev/null || true
+# Kind's kubelets serve self-signed certificates, hence --kubelet-insecure-tls.
+helm_upgrade metrics-server kube-system metrics-server "${METRICS_SERVER_REPO}" \
+  metrics-server "${METRICS_SERVER_CHART_VERSION}" \
+  --set 'args={--kubelet-insecure-tls}' \
+  --wait --timeout 180s
+success "metrics-server installed"
 
-helm upgrade --install sealed-secrets sealed-secrets/sealed-secrets \
-  --namespace kube-system \
+# ---------------------------------------------------------------------------
+# Step 5: Sealed Secrets controller
+# ---------------------------------------------------------------------------
+step "Installing Sealed Secrets controller (chart ${SEALED_SECRETS_CHART_VERSION})"
+
+helm_upgrade sealed-secrets kube-system sealed-secrets "${SEALED_SECRETS_REPO}" \
+  sealed-secrets "${SEALED_SECRETS_CHART_VERSION}" \
   --values "${REPO_ROOT}/security/sealed-secrets/controller-values.yaml" \
-  --wait \
-  --timeout 120s
-
-success "Sealed Secrets controller installed"
+  --wait --timeout 180s
+success "Sealed Secrets controller installed (kube-system/sealed-secrets-controller)"
 
 # ---------------------------------------------------------------------------
-# Step 5: Install Prometheus + Grafana (kube-prometheus-stack)
+# Step 6: OPA Gatekeeper
 # ---------------------------------------------------------------------------
-step "Installing Prometheus + Grafana (kube-prometheus-stack)"
+step "Installing OPA Gatekeeper ${GATEKEEPER_CHART_VERSION}"
 
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
-helm repo update prometheus-community 2>/dev/null || true
+helm_upgrade gatekeeper gatekeeper-system gatekeeper "${GATEKEEPER_REPO}" \
+  gatekeeper "${GATEKEEPER_CHART_VERSION}" \
+  --wait --timeout 300s
 
-kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+# Templates first. Gatekeeper turns each ConstraintTemplate into a new CRD
+# (e.g. K8sBlockLatestImage); a Constraint of that kind can only be created
+# once the CRD exists, so applying both together fails on a fresh cluster.
+info "Applying ConstraintTemplates..."
+retry 5 5 kubectl apply -f "${REPO_ROOT}/security/opa-gatekeeper/templates/"
 
-helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-  --namespace monitoring \
-  --values "${REPO_ROOT}/observability/prometheus/prometheus-values.yaml" \
-  --timeout 300s \
-  --wait || warn "kube-prometheus-stack install took longer than expected — may still be starting"
+info "Waiting for Gatekeeper to create the constraint CRDs..."
+kubectl wait constrainttemplates --all \
+  --for=jsonpath='{.status.created}'=true --timeout=120s
 
-# Install Grafana separately
-helm repo add grafana https://grafana.github.io/helm-charts 2>/dev/null || true
-helm repo update grafana 2>/dev/null || true
-
-helm upgrade --install grafana grafana/grafana \
-  --namespace monitoring \
-  --values "${REPO_ROOT}/observability/grafana/grafana-values.yaml" \
-  --wait \
-  --timeout 120s
-
-# Apply custom alert rules
-kubectl apply -f "${REPO_ROOT}/observability/prometheus/alerts/deployment-alerts.yaml" \
-  --namespace monitoring 2>/dev/null || true
-kubectl apply -f "${REPO_ROOT}/observability/prometheus/alerts/app-alerts.yaml" \
-  --namespace monitoring 2>/dev/null || true
-kubectl apply -f "${REPO_ROOT}/observability/prometheus/service-monitor.yaml" \
-  --namespace monitoring 2>/dev/null || true
-
-success "Prometheus + Grafana installed"
-info "Grafana UI: http://localhost:30300 (admin / gitops-demo-admin)"
+info "Applying Constraints..."
+retry 5 5 kubectl apply -f "${REPO_ROOT}/security/opa-gatekeeper/constraints/"
+success "OPA Gatekeeper policies active"
 
 # ---------------------------------------------------------------------------
-# Step 6: Install OPA Gatekeeper
+# Step 7: Observability (Prometheus, Grafana, Loki, Alloy)
 # ---------------------------------------------------------------------------
-step "Installing OPA Gatekeeper"
-
-helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts 2>/dev/null || true
-helm repo update gatekeeper 2>/dev/null || true
-
-helm upgrade --install gatekeeper gatekeeper/gatekeeper \
-  --namespace gatekeeper-system --create-namespace \
-  --wait \
-  --timeout 120s
-
-info "Waiting for Gatekeeper webhooks to be ready..."
-sleep 15  # give webhook time to register
-
-# Apply constraint templates and constraints
-for f in "${REPO_ROOT}/security/opa-gatekeeper/constraints/"*.yaml; do
-  info "Applying OPA constraint: $(basename "$f")"
-  kubectl apply -f "$f" || warn "Failed to apply $f — Gatekeeper may still be starting"
-done
-
-success "OPA Gatekeeper installed"
+bash "${REPO_ROOT}/scripts/install-observability.sh"
 
 # ---------------------------------------------------------------------------
-# Step 7: Apply ArgoCD AppProject and Applications
+# Step 8: Argo CD + AppProject + Applications
 # ---------------------------------------------------------------------------
-step "Applying ArgoCD AppProject and Application CRDs"
-
-# Note: these reference the real GitHub repo. For local demo, ArgoCD will
-# show them as OutOfSync until you update the repoURL to your fork.
-kubectl apply -f "${REPO_ROOT}/argocd/projects/gitops-project.yaml"
-
-info "Applying ArgoCD Applications (dev auto-syncs, staging/prod are manual)..."
-kubectl apply -f "${REPO_ROOT}/argocd/applications/dev.yaml"
-kubectl apply -f "${REPO_ROOT}/argocd/applications/staging.yaml"
-kubectl apply -f "${REPO_ROOT}/argocd/applications/prod.yaml"
-
-success "ArgoCD Applications configured"
+bash "${REPO_ROOT}/scripts/install-argocd.sh"
 
 # ---------------------------------------------------------------------------
-# Step 8: Print summary
+# Step 9: Summary
 # ---------------------------------------------------------------------------
+ARGOCD_PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" 2>/dev/null | base64 -d 2>/dev/null \
+  || echo "run: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d")
+
 echo ""
 echo -e "${BOLD}${GREEN}============================================================${NC}"
 echo -e "${BOLD}${GREEN}  Setup complete! GitOps demo cluster is ready.${NC}"
 echo -e "${BOLD}${GREEN}============================================================${NC}"
 echo ""
 echo -e "${BOLD}URLs:${NC}"
-echo "  ArgoCD UI:      http://localhost:30080"
-echo "  Grafana UI:     http://localhost:30300"
+echo "  Argo CD UI:     http://localhost:30080"
+echo "  Grafana UI:     http://localhost:30300   (Prometheus + Loki datasources)"
+echo "  App (dev):      http://dev.gitops.local      API: http://api.dev.gitops.local/docs"
+echo ""
+echo -e "${BOLD}One-time: map the Ingress hosts to localhost${NC} (needs sudo):"
+echo "  echo '127.0.0.1 dev.gitops.local api.dev.gitops.local staging.gitops.local api.staging.gitops.local prod.gitops.local api.prod.gitops.local' | sudo tee -a /etc/hosts"
+echo "  (or skip it and use: make port-forward)"
 echo ""
 echo -e "${BOLD}Credentials:${NC}"
-ARGOCD_PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath="{.data.password}" 2>/dev/null | base64 -d 2>/dev/null || echo "run: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d")
-echo "  ArgoCD:  admin / ${ARGOCD_PASS}"
+echo "  Argo CD: admin / ${ARGOCD_PASS}"
 echo "  Grafana: admin / gitops-demo-admin"
 echo ""
 echo -e "${BOLD}Next steps:${NC}"
-echo "  1. Ensure repoURL in argocd/applications/*.yaml points to your GitHub repo"
-echo "  2. Push the repo to GitHub to trigger the CI pipeline"
-echo "  3. Watch ArgoCD auto-sync dev:   kubectl get apps -n argocd -w"
-echo "  4. Run the demo:                 make demo"
-echo "  5. Port-forward all UIs:         make port-forward"
+echo "  1. Watch Argo CD sync dev:       kubectl get applications -n argocd -w"
+echo "  2. Run the demo:                 make demo"
+echo "  3. Promote dev → staging:        GitHub → Actions → Promote Environment"
+echo "     then sync it:                 argocd app sync gitops-demo-staging (or the UI)"
 echo ""
 echo -e "${BOLD}Useful commands:${NC}"
-echo "  kubectl get pods -A                    # all pods"
-echo "  kubectl get apps -n argocd             # ArgoCD applications"
-echo "  argocd app list                        # (requires argocd CLI)"
-echo "  make status                            # ArgoCD sync status"
-echo "  make logs                              # tail pod logs"
+echo "  make status      # Argo CD sync status"
+echo "  make pods        # pods in every environment"
+echo "  make logs        # tail backend logs"
 echo ""

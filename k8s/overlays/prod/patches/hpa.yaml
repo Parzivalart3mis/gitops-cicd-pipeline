@@ -1,0 +1,22 @@
+# patches/hpa.yaml — Production autoscaling range.
+#
+# minReplicas (3) must stay above the PDB's minAvailable (2): if the HPA could
+# scale prod down to 1 pod, the PDB would block every voluntary eviction and
+# node drains would hang.
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+spec:
+  minReplicas: 3
+  maxReplicas: 6
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: frontend
+spec:
+  minReplicas: 3
+  maxReplicas: 6

@@ -1,0 +1,72 @@
+# observability/loki/alloy-values.yaml — Grafana Alloy as the log shipper.
+#
+# Chart: grafana/alloy (version pinned in scripts/versions.env as
+# ALLOY_CHART_VERSION). Alloy replaces Promtail, which reached end of life.
+#
+# One Alloy pod (a Deployment, not a DaemonSet) tails container logs through
+# the Kubernetes API (loki.source.kubernetes), so it needs no hostPath mounts,
+# and forwards them to Loki. Only the gitops-* application namespaces are
+# collected, labelled with namespace/pod/container/app so queries like
+#   {namespace="gitops-dev", app="backend"} | json
+# work in Grafana. JSON fields (level, event, …) are parsed at query time
+# with `| json` rather than turned into labels, to keep cardinality low.
+#
+# Install: scripts/install-observability.sh.
+
+controller:
+  type: deployment
+  replicas: 1
+
+alloy:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+  configMap:
+    create: true
+    content: |-
+      // Discover pods in the application namespaces.
+      discovery.kubernetes "pods" {
+        role = "pod"
+        namespaces {
+          names = ["gitops-dev", "gitops-staging", "gitops-prod"]
+        }
+      }
+
+      // Turn Kubernetes metadata into Loki stream labels.
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+      }
+
+      // Tail container logs via the API server (no node filesystem access).
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push"
+        }
+      }

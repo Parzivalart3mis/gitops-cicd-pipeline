@@ -15,9 +15,13 @@ set -euo pipefail
 GREEN='\033[0;32m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 info() { echo -e "${CYAN}[INFO]${NC} $*"; }
 
-# Kill any existing port-forwards for our ports
-pkill -f "kubectl port-forward" 2>/dev/null || true
+# Stop forwards a previous run of this script left behind, and only those:
+# other `kubectl port-forward` sessions on this machine are left alone.
+pkill -f "kubectl port-forward svc/(argocd-server|grafana|backend|frontend) " 2>/dev/null || true
 sleep 1
+
+# Ctrl+C (or any exit) stops the forwards this run started.
+trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
 
 info "Starting port-forwards..."
 
@@ -33,7 +37,7 @@ echo -e "${BOLD}${GREEN}Port-forwards active:${NC}"
 echo "  ArgoCD UI:  http://localhost:8080"
 echo "  Grafana:    http://localhost:3000 (admin / gitops-demo-admin)"
 echo "  Backend:    http://localhost:8000/healthz"
-echo "  Frontend:   http://localhost:8888"
+echo "  Frontend:   http://localhost:8888  (calls the API through its own /backend proxy)"
 echo ""
 echo "Press Ctrl+C to stop all port-forwards."
 

@@ -1,8 +1,16 @@
 # common/resource-quota.yaml — Namespace-level resource quotas.
 #
-# ResourceQuotas prevent a single namespace from consuming all cluster
-# resources. These base values are intentionally generous; tighter limits
-# can be applied via overlay patches.
+# ResourceQuotas stop one namespace from consuming the whole cluster. A quota
+# must still fit the namespace's own worst case, otherwise pods are rejected
+# at admission ("exceeded quota") mid-rollout or mid-scale-up:
+#
+#   worst case = (HPA maxReplicas + 1 rolling-update surge pod) × per-pod
+#                requests/limits, summed over backend and frontend.
+#
+# These base values cover dev (HPA 1–3) and staging (HPA 2–4); staging peaks
+# at 750m/960Mi requested and 3.5 CPU/1920Mi limits. Prod (HPA 3–6, larger
+# pods) raises them in overlays/prod/patches/resource-quota.yaml. Re-check
+# the arithmetic whenever replicas, HPA ranges or container resources change.
 
 apiVersion: v1
 kind: ResourceQuota

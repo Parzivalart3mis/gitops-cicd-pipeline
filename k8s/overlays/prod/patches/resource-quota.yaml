@@ -1,0 +1,20 @@
+# patches/resource-quota.yaml — Production-sized namespace quota.
+#
+# Worst case = (HPA max 6 + 1 surge) = 7 pods per Deployment:
+#   backend  7 × (200m / 256Mi requests, 1000m / 512Mi limits)
+#   frontend 7 × (100m / 128Mi requests,  500m / 256Mi limits)
+#   → requests 2.1 CPU / 2688Mi, limits 10.5 CPU / 5376Mi
+# The base quota (2 CPU / 1Gi requests, 4 CPU / 2Gi limits) can't even hold
+# the steady-state 3 + 3 replicas (1152Mi requested, 4.5 CPU / 2304Mi limits).
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: gitops-quota
+spec:
+  hard:
+    requests.cpu: "3"
+    limits.cpu: "12"
+    requests.memory: "3Gi"
+    limits.memory: "6Gi"
+    pods: "20"

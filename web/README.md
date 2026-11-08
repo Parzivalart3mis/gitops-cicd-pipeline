@@ -17,7 +17,7 @@ designed to be hosted on **Vercel** as a portfolio piece.
    Leave *Build Command* empty and *Output Directory* empty.
 4. Click **Deploy**.
 
-Vercel serves `index.html` directly. Every push to the repo redeploys automatically.
+Vercel serves `index.html` directly. Pushes that change `web/` redeploy automatically; `ignoreCommand` in `vercel.json` skips builds for every other commit, including the CI bot's manifest commits.
 
 ### Option B — Vercel CLI
 

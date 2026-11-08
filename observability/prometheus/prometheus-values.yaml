@@ -1,11 +1,12 @@
 # observability/prometheus/prometheus-values.yaml
-# Helm values for kube-prometheus-stack (includes Prometheus + Alertmanager + Grafana).
+# Helm values for kube-prometheus-stack (Prometheus Operator, Prometheus,
+# Alertmanager, node-exporter, kube-state-metrics). Its bundled Grafana is
+# disabled: Grafana is installed separately (grafana-values.yaml).
 #
-# Install:
-#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-#   helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-#     --namespace monitoring --create-namespace \
-#     --values observability/prometheus/prometheus-values.yaml
+# Chart version pinned in scripts/versions.env
+# (KUBE_PROMETHEUS_STACK_CHART_VERSION). Install: scripts/install-observability.sh.
+# The release must be named kube-prometheus-stack: Grafana's datasource URL
+# (kube-prometheus-stack-prometheus) is derived from it.
 
 prometheus:
   prometheusSpec:
